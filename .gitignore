@@ -1,0 +1,17 @@
+node_modules
+.next
+.env*.local
+.DS_Store
+*.log
+*.tsbuildinfo
+next-env.d.ts
+
+# Atlas-specific
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Drizzle journal cache (keep migrations, ignore meta artifacts users don't need)
+drizzle/.snapshot
