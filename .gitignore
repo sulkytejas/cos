@@ -15,3 +15,14 @@ data/
 
 # Drizzle journal cache (keep migrations, ignore meta artifacts users don't need)
 drizzle/.snapshot
+
+# iOS / Xcode
+ios/Atlas.xcodeproj/
+ios/build/
+ios/DerivedData/
+ios/*.xcworkspace/
+ios/.build/
+ios/Package.resolved
+ios/**/xcuserdata/
+ios/**/*.xcuserstate
+*.DS_Store
