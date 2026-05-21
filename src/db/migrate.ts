@@ -35,6 +35,7 @@ sqlite.close();
 
 import("./seed")
   .then(({ seedIfEmpty }) => seedIfEmpty())
+  .then(() => import("./seed-v2").then(({ seedV2IfEmpty }) => seedV2IfEmpty()))
   .catch((err) => {
     console.error("[atlas] seed failed:", err);
   });
