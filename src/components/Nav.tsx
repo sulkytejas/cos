@@ -36,6 +36,7 @@ export function Nav() {
             <Link
               key={item.href}
               href={item.href}
+              data-tab={item.href === "/chapters" ? "chapters" : undefined}
               className={cn(
                 "px-3 py-1.5 text-sm rounded-md transition-colors",
                 active

@@ -8,6 +8,7 @@ import { proposalRouter } from "./proposal";
 import { eventRouter } from "./event";
 import { watcherRouter } from "./watcher";
 import { signalRouter } from "./signal";
+import { morningRouter } from "./morning";
 
 export const appRouter = router({
   chapter: chapterRouter,
@@ -19,6 +20,7 @@ export const appRouter = router({
   event: eventRouter,
   watcher: watcherRouter,
   signal: signalRouter,
+  morning: morningRouter,
 });
 
 export type AppRouter = typeof appRouter;
