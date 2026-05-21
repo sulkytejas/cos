@@ -8,6 +8,7 @@ import {
   todos,
   decisions,
   entries,
+  events,
   chapterLinks,
   chapterTypes,
   chapterStatuses,
@@ -132,6 +133,14 @@ export const chapterRouter = router({
           startDate: input.startDate ?? null,
           endDate: input.endDate ?? null,
           purpose: input.purpose ?? null,
+        })
+        .run();
+      // v0.2: notify the worker so Atlas can prepare an opening brief.
+      db.insert(events)
+        .values({
+          id: randomUUID(),
+          type: "chapter_created",
+          payload: { chapterId: id, title: input.title },
         })
         .run();
       return { id };
