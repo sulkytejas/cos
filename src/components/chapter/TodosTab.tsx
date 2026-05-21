@@ -5,11 +5,32 @@ import { trpc } from "@/lib/trpc";
 import { dueClass, fmtDate, cn } from "@/lib/utils";
 import { Calendar, Plus, Trash2 } from "lucide-react";
 
+/** Tiny provenance dot: filled forest (manual) / hollow forest ring (extracted). */
+function ProvenanceDot({ source }: { source: "manual" | "extracted" | "inferred" }) {
+  const isAuto = source !== "manual";
+  return (
+    <span
+      aria-label={`source ${source}`}
+      style={{
+        display: "inline-block",
+        width: 6,
+        height: 6,
+        borderRadius: "50%",
+        background: isAuto ? "transparent" : "var(--color-forest)",
+        border: isAuto ? "1px solid var(--color-forest)" : "none",
+        flexShrink: 0,
+        transform: "translateY(-1px)",
+      }}
+    />
+  );
+}
+
 type Todo = {
   id: string;
   text: string;
   done: boolean;
   dueDate: string | null;
+  source?: "manual" | "extracted" | "inferred";
 };
 
 type ChapterShape = {
@@ -152,14 +173,17 @@ function TodoRow({
       </button>
 
       <div className="flex-1 min-w-0">
-        <p
-          className={cn(
-            "text-sm leading-snug",
-            todo.done ? "text-ink-faint line-through" : "text-ink"
-          )}
-        >
-          {todo.text}
-        </p>
+        <div className="flex items-baseline gap-2">
+          <ProvenanceDot source={todo.source ?? "manual"} />
+          <p
+            className={cn(
+              "text-sm leading-snug",
+              todo.done ? "text-ink-faint line-through" : "text-ink"
+            )}
+          >
+            {todo.text}
+          </p>
+        </div>
         {todo.dueDate ? (
           <p
             className={cn(

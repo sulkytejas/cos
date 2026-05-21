@@ -9,6 +9,7 @@ import { Plus } from "lucide-react";
 const items = [
   { href: "/", label: "Today" },
   { href: "/chapters", label: "Chapters" },
+  { href: "/review", label: "Review" },
   { href: "/settings", label: "Settings" },
 ];
 

@@ -63,8 +63,14 @@ export function JournalTab({ chapter }: { chapter: ChapterShape }) {
         </p>
       ) : (
         <ol className="space-y-5">
-          {chapter.entries.map((e) => (
-            <li key={e.id} className="group flex gap-5">
+          {chapter.entries.map((e) => {
+            const passive = e.source !== "manual";
+            return (
+            <li
+              key={e.id}
+              className="group flex gap-5"
+              style={{ opacity: passive ? 0.78 : 1 }}
+            >
               <div className="w-24 shrink-0 pt-1 text-right">
                 <p className="font-mono text-[10px] uppercase tracking-widest text-ink-faint">
                   {fmtDate(e.date, "MMM d")}
@@ -74,7 +80,14 @@ export function JournalTab({ chapter }: { chapter: ChapterShape }) {
                 </p>
               </div>
               <div className="flex-1 hairline-b pb-5 last:border-0">
-                <p className="text-[15px] leading-relaxed text-ink whitespace-pre-wrap">
+                <p
+                  className="leading-relaxed whitespace-pre-wrap"
+                  style={{
+                    fontSize: 15,
+                    color: passive ? "var(--color-ink-secondary)" : "var(--color-ink)",
+                    fontWeight: passive ? 400 : 500,
+                  }}
+                >
                   {e.content}
                 </p>
                 <div className="mt-2 flex items-center justify-between">
@@ -91,7 +104,8 @@ export function JournalTab({ chapter }: { chapter: ChapterShape }) {
                 </div>
               </div>
             </li>
-          ))}
+          );
+          })}
         </ol>
       )}
     </div>

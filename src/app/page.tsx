@@ -1,255 +1,307 @@
 "use client";
-
+/**
+ * Today — v0.2 layout. Five blocks, in order:
+ *   • Date headline + next milestone strip
+ *   • "Handled while you slept" line (counts from signals + filed proposals)
+ *   • "Briefs for today" (from briefs.forToday)
+ *   • "Atlas is watching" (from watchers.active)
+ *   • "Up next" todos (carried over from v0.1, kept slim)
+ */
 import Link from "next/link";
 import { trpc } from "@/lib/trpc";
+import { format } from "date-fns";
+import { BriefTeaserCard, WatcherLine } from "@/components/brief/teasers";
+import { dueClass, fmtDate } from "@/lib/utils";
 import { TypeIcon } from "@/components/TypeIcon";
-import { dueClass, fmtDate, fmtRelative } from "@/lib/utils";
-import { differenceInCalendarDays, format, parseISO } from "date-fns";
-import { ArrowUpRight, Calendar, Clock } from "lucide-react";
 
 export default function TodayPage() {
   const today = new Date();
-  const chaptersQuery = trpc.chapter.list.useQuery();
+
+  const briefsQuery = trpc.brief.forToday.useQuery();
+  const watchersQuery = trpc.watcher.active.useQuery();
+  const overnightQuery = trpc.signal.overnight.useQuery();
+  const proposalCountsQuery = trpc.proposal.countsForToday.useQuery();
   const todosQuery = trpc.todo.topAcrossActive.useQuery({ limit: 5 });
 
-  const upcomingMilestone = computeNextMilestone(chaptersQuery.data ?? []);
-  const activeCount =
-    chaptersQuery.data?.filter((c) => c.status === "active").length ?? 0;
-  const upcomingCount =
-    chaptersQuery.data?.filter((c) => c.status === "upcoming").length ?? 0;
+  const briefs = briefsQuery.data ?? [];
+  const watchers = watchersQuery.data ?? [];
 
   return (
-    <div className="space-y-10">
-      <section className="flex flex-col gap-2 pt-6 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <p className="font-mono text-xs uppercase tracking-widest text-ink-faint">
-            {format(today, "EEEE")}
-          </p>
-          <h1 className="font-serif text-5xl leading-none sm:text-6xl">
-            {format(today, "MMMM d")}
-          </h1>
-        </div>
-        {upcomingMilestone ? (
-          <div className="text-right">
-            <p className="font-mono text-[10px] uppercase tracking-widest text-ink-faint">
-              next milestone
-            </p>
-            <p className="font-serif text-xl">
-              {upcomingMilestone.days === 0
-                ? "today"
-                : upcomingMilestone.days > 0
-                  ? `T-${upcomingMilestone.days}d`
-                  : `+${Math.abs(upcomingMilestone.days)}d`}{" "}
-              <span className="text-ink-secondary text-base">
-                · {upcomingMilestone.title}
+    <div className="space-y-10 pt-6 pb-20">
+      {/* Date headline + "next" strip */}
+      <section>
+        <p
+          className="font-mono"
+          style={{
+            fontSize: 10,
+            letterSpacing: "0.18em",
+            textTransform: "uppercase",
+            color: "var(--color-ink-3)",
+            marginBottom: 6,
+          }}
+        >
+          {format(today, "EEEE")}
+        </p>
+        <h1
+          className="serif-i"
+          style={{
+            margin: 0,
+            fontSize: 72,
+            lineHeight: 0.92,
+            fontStyle: "italic",
+            color: "var(--color-ink)",
+            letterSpacing: "-0.018em",
+          }}
+        >
+          {format(today, "MMMM d")}
+        </h1>
+        {briefs[0] && (
+          <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 8 }}>
+            <span className="pulse-dot" />
+            <span className="micro">Next</span>
+            {briefs[0].when && (
+              <span
+                className="font-mono"
+                style={{ fontSize: 11, color: "var(--color-teal-deep)", letterSpacing: "0.04em" }}
+              >
+                {briefs[0].when}
               </span>
-            </p>
-          </div>
-        ) : null}
-      </section>
-
-      <section className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <div className="card lg:col-span-2 p-7">
-          <div className="flex items-center justify-between">
-            <span className="font-mono text-[10px] uppercase tracking-widest text-ink-faint">
-              Morning brief
-            </span>
-            <span className="font-mono text-[10px] uppercase tracking-widest text-ink-faint">
-              {format(today, "yyyy-MM-dd")}
-            </span>
-          </div>
-          <p className="mt-5 font-serif text-2xl leading-snug text-ink">
-            {brief(chaptersQuery.data ?? [], activeCount, upcomingCount)}
-          </p>
-          <p className="mt-5 text-sm text-ink-secondary leading-relaxed">
-            Synthesis is placeholder for now — the model layer plugs in here. The
-            shape is right: a few sentences pulled from across active chapters,
-            surfaced where you start the day. Tomorrow it can read the journal,
-            the decision log, the email feed — and read them back to you here.
-          </p>
-        </div>
-
-        <div className="card p-6">
-          <div className="flex items-center justify-between">
-            <span className="font-mono text-[10px] uppercase tracking-widest text-ink-faint">
-              Today's calendar
-            </span>
-            <Calendar className="h-3.5 w-3.5 text-ink-faint" />
-          </div>
-          <ul className="mt-4 space-y-3 text-sm">
-            {fakeCalendar.map((ev) => (
-              <li key={ev.time} className="flex items-start gap-3">
-                <span className="font-mono text-xs text-ink-faint w-12 shrink-0 pt-0.5">
-                  {ev.time}
-                </span>
-                <div>
-                  <p className="text-ink">{ev.title}</p>
-                  <p className="text-xs text-ink-faint">{ev.subtitle}</p>
-                </div>
-              </li>
-            ))}
-          </ul>
-          <p className="mt-5 hairline-t pt-3 font-mono text-[10px] uppercase tracking-widest text-ink-faint">
-            placeholder · connect Calendar in Settings
-          </p>
-        </div>
-      </section>
-
-      <section>
-        <div className="flex items-baseline justify-between">
-          <h2 className="font-serif text-2xl">Up next</h2>
-          <Link
-            href="/chapters"
-            className="btn-ghost text-xs font-mono uppercase tracking-widest"
-          >
-            All chapters <ArrowUpRight className="h-3 w-3" />
-          </Link>
-        </div>
-
-        <ul className="mt-4 card divide-y divide-[color:var(--color-border-warm)]">
-          {todosQuery.data?.length === 0 ? (
-            <li className="px-5 py-6 text-sm text-ink-secondary">
-              No active todos. Capture something with{" "}
-              <span className="kbd">⌘K</span>.
-            </li>
-          ) : null}
-          {todosQuery.data?.map((t) => (
-            <li
-              key={t.id}
-              className="flex items-start gap-4 px-5 py-4 transition-colors hover:bg-[color:var(--color-paper)]"
+            )}
+            <span
+              className="serif-i"
+              style={{ fontStyle: "italic", fontSize: 14, color: "var(--color-ink-2)" }}
             >
-              <div className="mt-1 h-3.5 w-3.5 shrink-0 rounded-sm border border-[color:var(--color-border-warm-strong)]" />
-              <div className="flex-1 min-w-0">
-                <p className="text-sm text-ink leading-snug">{t.text}</p>
-                <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-ink-faint">
-                  <Link
-                    href={`/chapter/${t.chapterId}`}
-                    className="flex items-center gap-1.5 hover:text-ink"
-                  >
-                    <TypeIcon
-                      type={t.chapterType}
-                      className="h-3 w-3"
-                    />
-                    <span>{t.chapterTitle}</span>
-                  </Link>
-                  {t.dueDate ? (
-                    <span
-                      className={`flex items-center gap-1 font-mono ${dueClass(t.dueDate)}`}
-                    >
-                      <Clock className="h-3 w-3" />
-                      {fmtDate(t.dueDate)}
-                    </span>
-                  ) : null}
-                </div>
-              </div>
-            </li>
-          ))}
-        </ul>
+              {briefs[0].title}
+            </span>
+            <span style={{ flex: 1, height: 1, background: "var(--color-hairline-soft)", marginLeft: 4 }} />
+          </div>
+        )}
       </section>
 
+      <HandledWhileYouSlept
+        signalBuckets={overnightQuery.data?.buckets ?? {}}
+        totalSignals={overnightQuery.data?.total ?? 0}
+        filedByType={proposalCountsQuery.data?.filedByType ?? {}}
+      />
+
+      {/* Briefs for today */}
       <section>
-        <div className="flex items-baseline justify-between">
-          <h2 className="font-serif text-2xl">Active chapters</h2>
-          <span className="font-mono text-xs text-ink-faint">
-            {activeCount} active · {upcomingCount} upcoming
+        <div className="flex items-baseline justify-between" style={{ marginBottom: 12 }}>
+          <h2 className="font-serif" style={{ fontSize: 22, color: "var(--color-ink)" }}>
+            Briefs for today
+          </h2>
+          <span
+            className="font-mono"
+            style={{
+              fontSize: 9.5,
+              color: "var(--color-ink-3)",
+              letterSpacing: "0.16em",
+              textTransform: "uppercase",
+            }}
+          >
+            {briefs.length} {briefs.length === 1 ? "ready" : "ready"}
           </span>
         </div>
-        <ul className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-          {chaptersQuery.data
-            ?.filter((c) => c.status === "active" || c.status === "upcoming")
-            .map((c) => (
-              <li key={c.id}>
-                <Link
-                  href={`/chapter/${c.id}`}
-                  className="card flex items-center justify-between gap-4 p-4 transition-colors hover:border-warm-strong"
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <TypeIcon type={c.type} className="h-4 w-4 text-ink-secondary" />
-                    <div className="min-w-0">
-                      <p className="truncate text-sm text-ink">{c.title}</p>
-                      <p className="font-mono text-[10px] uppercase tracking-widest text-ink-faint">
-                        {c.status} · updated {fmtRelative(c.updatedAt)}
-                      </p>
-                    </div>
-                  </div>
-                  <span className="font-mono text-xs text-ink-faint">
-                    {c.todoDone}/{c.todoCount}
-                  </span>
-                </Link>
-              </li>
+        {briefs.length === 0 ? (
+          <p
+            className="serif-i"
+            style={{
+              fontStyle: "italic",
+              color: "var(--color-ink-faint)",
+              fontSize: 15,
+              padding: "20px 0",
+            }}
+          >
+            Nothing surfaced yet. Atlas will draft briefs as situations form.
+          </p>
+        ) : (
+          <div className="flex flex-col gap-3">
+            {briefs.map((b, i) => (
+              <BriefTeaserCard
+                key={b.id}
+                brief={{
+                  id: b.id,
+                  title: b.title,
+                  preview: b.preview,
+                  chapterTitle: b.chapterTitle,
+                  when: b.when,
+                  urgent: i === 0,
+                }}
+              />
             ))}
+          </div>
+        )}
+      </section>
+
+      {/* Atlas is watching */}
+      <section>
+        <div className="flex items-baseline justify-between" style={{ marginBottom: 6 }}>
+          <h2 className="font-serif" style={{ fontSize: 22, color: "var(--color-ink)" }}>
+            Atlas is watching
+          </h2>
+          <span
+            className="font-mono"
+            style={{
+              fontSize: 9.5,
+              color: "var(--color-ink-3)",
+              letterSpacing: "0.16em",
+              textTransform: "uppercase",
+            }}
+          >
+            {watchers.length} active
+          </span>
+        </div>
+        {watchers.length === 0 ? (
+          <p
+            className="serif-i"
+            style={{ fontStyle: "italic", color: "var(--color-ink-faint)", fontSize: 14, padding: "10px 0" }}
+          >
+            Nothing on watch. Atlas adds watchers when it spots something worth checking back on.
+          </p>
+        ) : (
+          <div>
+            {watchers.slice(0, 5).map((w) => (
+              <WatcherLine
+                key={w.id}
+                w={{ id: w.id, description: w.description, cadenceLabel: w.cadenceLabel }}
+              />
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* Up next — todos kept slim */}
+      <section>
+        <div className="flex items-baseline justify-between" style={{ marginBottom: 12 }}>
+          <h2 className="font-serif" style={{ fontSize: 22, color: "var(--color-ink)" }}>
+            Up next
+          </h2>
+          <Link
+            href="/chapters"
+            className="font-mono"
+            style={{
+              fontSize: 10,
+              color: "var(--color-ink-3)",
+              letterSpacing: "0.16em",
+              textTransform: "uppercase",
+            }}
+          >
+            All chapters →
+          </Link>
+        </div>
+        <ul className="card divide-y divide-[color:var(--color-border-warm)]">
+          {(todosQuery.data ?? []).length === 0 ? (
+            <li className="px-5 py-6 text-sm" style={{ color: "var(--color-ink-secondary)" }}>
+              No active todos. Capture something with <span className="kbd">⌘K</span>.
+            </li>
+          ) : (
+            (todosQuery.data ?? []).map((t) => (
+              <li key={t.id} className="flex items-start gap-4 px-5 py-4">
+                <div
+                  className="mt-1 h-3.5 w-3.5 shrink-0 rounded-sm"
+                  style={{
+                    border:
+                      t.source === "manual"
+                        ? "1px solid var(--color-border-warm-strong)"
+                        : "1px solid var(--color-forest)",
+                    background:
+                      t.source === "manual" ? "transparent" : "transparent",
+                  }}
+                  aria-label={`source ${t.source}`}
+                />
+                <div className="flex-1 min-w-0">
+                  <p style={{ fontSize: 14, color: "var(--color-ink)", lineHeight: 1.4 }}>{t.text}</p>
+                  <div
+                    className="flex items-center gap-3 mt-1"
+                    style={{ fontSize: 11, color: "var(--color-ink-faint)" }}
+                  >
+                    <Link
+                      href={`/chapter/${t.chapterId}`}
+                      className="flex items-center gap-1.5 hover:text-ink"
+                    >
+                      <TypeIcon type={t.chapterType} className="h-3 w-3" />
+                      <span>{t.chapterTitle}</span>
+                    </Link>
+                    {t.dueDate && (
+                      <span className={`font-mono ${dueClass(t.dueDate)}`}>{fmtDate(t.dueDate)}</span>
+                    )}
+                  </div>
+                </div>
+              </li>
+            ))
+          )}
         </ul>
       </section>
     </div>
   );
 }
 
-const fakeCalendar = [
-  { time: "09:00", title: "Deep work block", subtitle: "Deck v3, slides 1–6" },
-  { time: "11:30", title: "Lightspeed — partner intro", subtitle: "30 min · video" },
-  { time: "15:00", title: "Tennis", subtitle: "Bombay Gymkhana" },
-  { time: "19:30", title: "Dinner — A.", subtitle: "Soam, Babulnath" },
-];
-
-function computeNextMilestone(
-  chapters: Array<{ title: string; startDate: string | null; endDate: string | null; status: string }>
-) {
-  const now = new Date();
-  const candidates: { title: string; days: number }[] = [];
-
-  for (const c of chapters) {
-    if (c.status === "done") continue;
-    if (c.startDate) {
-      try {
-        const d = parseISO(c.startDate);
-        const diff = differenceInCalendarDays(d, now);
-        if (diff >= -7) {
-          candidates.push({ title: `${c.title} begins`, days: diff });
-        }
-      } catch {}
-    }
-    if (c.endDate) {
-      try {
-        const d = parseISO(c.endDate);
-        const diff = differenceInCalendarDays(d, now);
-        if (diff >= 0 && diff <= 365) {
-          candidates.push({ title: `${c.title} ends`, days: diff });
-        }
-      } catch {}
-    }
-  }
-
-  if (candidates.length === 0) return null;
-  candidates.sort((a, b) => Math.abs(a.days) - Math.abs(b.days));
-  return candidates[0];
-}
-
-function brief(
-  chapters: Array<{ title: string; status: string; type: string }>,
-  active: number,
-  upcoming: number
-): string {
-  if (chapters.length === 0) {
-    return "Quiet board. Create a chapter to give the day a shape.";
-  }
-  const activeTitles = chapters
-    .filter((c) => c.status === "active")
-    .map((c) => c.title);
-  const upcomingTitles = chapters
-    .filter((c) => c.status === "upcoming")
-    .map((c) => c.title);
-
+function HandledWhileYouSlept({
+  signalBuckets,
+  totalSignals,
+  filedByType,
+}: {
+  signalBuckets: Record<string, number>;
+  totalSignals: number;
+  filedByType: Record<string, number>;
+}) {
+  // Compose a one-line summary sentence in Atlas's voice.
   const parts: string[] = [];
-  if (active > 0) {
-    parts.push(
-      `${active} chapter${active === 1 ? "" : "s"} in motion — ${activeTitles.slice(0, 2).join(", ")}${activeTitles.length > 2 ? `, and ${activeTitles.length - 2} more` : ""}.`
-    );
+  if (signalBuckets.gmail > 5) parts.push(`Filed ${signalBuckets.gmail} newsletters`);
+  if (filedByType.todo) parts.push(`drafted ${filedByType.todo} todos`);
+  if (filedByType.decision) parts.push(`noted ${filedByType.decision} decision`);
+  if (filedByType.journal_entry || filedByType.journal) {
+    const n = (filedByType.journal_entry ?? 0) + (filedByType.journal ?? 0);
+    parts.push(`saved ${n} journal entr${n === 1 ? "y" : "ies"}`);
   }
-  if (upcoming > 0) {
-    parts.push(
-      `On the horizon: ${upcomingTitles.slice(0, 2).join(", ")}.`
-    );
-  }
-  parts.push("Hold the arc, not just the items.");
-  return parts.join(" ");
+  const sentence =
+    parts.length === 0
+      ? totalSignals > 0
+        ? `Handled ${totalSignals} small signals overnight; nothing flagged for review.`
+        : "Nothing came in overnight."
+      : parts.join(" · ");
+
+  return (
+    <section
+      style={{
+        padding: "12px 0 14px",
+        borderTop: "1px solid var(--color-hairline)",
+        borderBottom: "1px solid var(--color-hairline)",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 6 }}>
+        <span
+          className="font-mono"
+          style={{
+            fontSize: 9,
+            letterSpacing: "0.2em",
+            textTransform: "uppercase",
+            color: "var(--color-ink-3)",
+          }}
+        >
+          Handled while you slept
+        </span>
+        <span
+          className="font-mono"
+          style={{ fontSize: 9, color: "var(--color-ink-4)", letterSpacing: "0.06em" }}
+        >
+          · overnight
+        </span>
+      </div>
+      <div
+        className="font-mono"
+        style={{
+          fontSize: 11.5,
+          lineHeight: 1.55,
+          color: "var(--color-ink-2)",
+          letterSpacing: "0.01em",
+        }}
+      >
+        {sentence}.{" "}
+        <Link href="/review" style={{ color: "var(--color-teal-deep)" }}>
+          Review them →
+        </Link>
+      </div>
+    </section>
+  );
 }
