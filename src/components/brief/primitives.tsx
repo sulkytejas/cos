@@ -94,13 +94,43 @@ export function WatcherIcon({
   size?: number;
   color?: string;
 }) {
+  // Stable gradient id per render so multiple icons on the page don't collide.
+  // (React 18+ useId would be cleaner, but this primitive renders inside
+  // server components too; a counter-style salt would force "use client".)
+  // Math.random is fine here — gradient ids only need to be unique per DOM.
+  const gradientId = `radar-grad-${Math.round(Math.random() * 1e9).toString(36)}`;
   return (
-    <svg width={size} height={size} viewBox="0 0 12 12" style={{ flexShrink: 0 }}>
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 12 12"
+      style={{ flexShrink: 0, overflow: "visible" }}
+      className="watcher-radar"
+    >
+      <defs>
+        <linearGradient id={gradientId} x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%" stopColor={color} stopOpacity="0" />
+          <stop offset="100%" stopColor={color} stopOpacity="1" />
+        </linearGradient>
+      </defs>
+      {/* Static rings + N tick + S tick + centre pip */}
       <circle cx="6" cy="6" r="5" fill="none" stroke={color} strokeWidth="0.7" />
       <circle cx="6" cy="6" r="2.6" fill="none" stroke={color} strokeWidth="0.7" />
       <circle cx="6" cy="6" r="0.9" fill={color} />
       <line x1="6" y1="1" x2="6" y2="2.4" stroke={color} strokeWidth="0.6" />
       <line x1="6" y1="9.6" x2="6" y2="11" stroke={color} strokeWidth="0.6" />
+      {/* The sweep arm — 5.4s full rotation around the centre */}
+      <g style={{ transformOrigin: "6px 6px" }} className="watcher-radar-sweep">
+        <line
+          x1="6"
+          y1="6"
+          x2="11"
+          y2="6"
+          stroke={`url(#${gradientId})`}
+          strokeWidth="1.1"
+          strokeLinecap="round"
+        />
+      </g>
     </svg>
   );
 }
