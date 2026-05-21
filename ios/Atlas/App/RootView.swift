@@ -1,67 +1,506 @@
 import SwiftUI
+import SwiftData
 
 struct RootView: View {
-    @State private var selection: Tab = .today
+    @Environment(\.modelContext) private var modelContext
+    @State private var tab: AppTab = .today
     @State private var showCapture = false
+    @State private var pullProgress: CGFloat = 0   // 0..1.2 (1+ = armed)
+    @State private var didKickOffIcons = false
 
-    enum Tab: Hashable {
-        case today, chapters, settings
+    enum AppTab: String, CaseIterable, Identifiable {
+        case today, chapters, review, settings
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .today: return "Today"
+            case .chapters: return "Chapters"
+            case .review: return "Review"
+            case .settings: return "Settings"
+            }
+        }
     }
 
+    @State private var chaptersTabFrame: CGRect = .zero
+
     var body: some View {
-        TabView(selection: $selection) {
-            NavigationStack {
-                TodayView(openCapture: { showCapture = true })
-            }
-            .tabItem {
-                Label("Today", systemImage: "sun.max")
-            }
-            .tag(Tab.today)
+        ZStack(alignment: .top) {
+            Theme.Palette.paper.ignoresSafeArea()
 
-            NavigationStack {
-                ChaptersListView()
-            }
-            .tabItem {
-                Label("Chapters", systemImage: "books.vertical")
-            }
-            .tag(Tab.chapters)
+            VStack(spacing: 0) {
+                AtlasHeader(onCapture: { showCapture = true })
+                Hairline().opacity(0.5)
 
-            NavigationStack {
-                SettingsView()
+                ZStack(alignment: .top) {
+                    Group {
+                        switch tab {
+                        case .today:
+                            NavigationStack {
+                                TodayView(pullProgress: $pullProgress,
+                                          onPullCapture: { showCapture = true })
+                            }
+                        case .chapters:
+                            NavigationStack { ChaptersListView() }
+                        case .review:
+                            NavigationStack {
+                                MorningView(chaptersTabFrame: chaptersTabFrame)
+                            }
+                        case .settings:
+                            NavigationStack { SettingsView() }
+                        }
+                    }
+                    // 320ms fade with slight upward drift between tabs
+                    .id(tab)
+                    .transition(.opacity.combined(with: .offset(y: 8)))
+
+                    PullIndicator(progress: pullProgress)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .animation(.easeInOut(duration: 0.32), value: tab)
+
+                Hairline().opacity(0.5)
+                BottomNav(active: $tab, chaptersTabFrame: $chaptersTabFrame)
             }
-            .tabItem {
-                Label("Settings", systemImage: "gearshape")
-            }
-            .tag(Tab.settings)
         }
-        .background(Theme.Palette.paper)
+        // Blur the entire app behind the Capture sheet so the sheet sits on
+        // a soft glass field, matching the prototype's backdrop-filter blur.
+        .blur(radius: showCapture ? 8 : 0)
+        .animation(.easeOut(duration: 0.28), value: showCapture)
         .sheet(isPresented: $showCapture) {
             CaptureSheet()
                 .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
+                .presentationDragIndicator(.hidden)
+                .presentationCornerRadius(22)
+                .presentationBackground(Theme.Palette.paper)
         }
-        .overlay(alignment: .bottomTrailing) {
-            CaptureFAB(action: { showCapture = true })
-                .padding(.trailing, 20)
-                .padding(.bottom, 70)
+        .task {
+            // One-shot: if a Gemini key is present, generate icons for any
+            // chapter that doesn't have one yet (or whose title changed).
+            guard !didKickOffIcons else { return }
+            didKickOffIcons = true
+            await IconGenerator.generateMissing(in: modelContext)
         }
     }
 }
 
-struct CaptureFAB: View {
-    let action: () -> Void
+// ───────────────────── Header ─────────────────────
+struct AtlasHeader: View {
+    let onCapture: () -> Void
 
     var body: some View {
-        Button(action: action) {
-            Image(systemName: "plus")
-                .font(.system(size: 22, weight: .semibold))
-                .foregroundStyle(Theme.Palette.paper)
-                .frame(width: 56, height: 56)
-                .background(Theme.Palette.moss)
-                .clipShape(Circle())
-                .shadow(color: Theme.Palette.moss.opacity(0.45), radius: 12, y: 4)
+        HStack(alignment: .center, spacing: 10) {
+            // App mark — peak rising above a horizon
+            AtlasLogo(size: 24)
+                .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .strokeBorder(Theme.Palette.hairline, lineWidth: 1)
+                )
+
+            Text("Atlas")
+                .font(Theme.Font.serifItalic(22))
+                .foregroundStyle(Theme.Palette.ink)
+            Text("v0.1")
+                .font(Theme.Font.mono(9.5))
+                .tracking(1.0)
+                .foregroundStyle(Theme.Palette.inkFainter)
+                .padding(.top, 4)
+            Rectangle()
+                .fill(Theme.Palette.hairline)
+                .frame(width: 1, height: 12)
+                .padding(.top, 4)
+            LiveClock()
+                .padding(.top, 4)
+
+            Spacer()
+
+            Button(action: onCapture) {
+                HStack(spacing: 6) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text("Capture")
+                        .font(Theme.Font.sans(12.5))
+                        .foregroundStyle(Theme.Palette.ink)
+                    Text("⌘K")
+                        .font(Theme.Font.mono(9))
+                        .foregroundStyle(Theme.Palette.inkFaint)
+                        .padding(.horizontal, 4).padding(.vertical, 1)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 2)
+                                .strokeBorder(Theme.Palette.hairline, lineWidth: 1)
+                        )
+                        .padding(.leading, 2)
+                }
+                .padding(.horizontal, 11).padding(.vertical, 7)
+                .foregroundStyle(Theme.Palette.ink)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4)
+                        .strokeBorder(Theme.Palette.hairline, lineWidth: 1)
+                )
+            }
+            .buttonStyle(.plain)
+            .pressable()
+        }
+        .padding(.horizontal, 22)
+        .padding(.vertical, 10)
+        .background(Theme.Palette.paper)
+    }
+}
+
+// ───────────────────── Pull-to-capture indicator ─────────────────────
+struct PullIndicator: View {
+    let progress: CGFloat        // 0..1.x — 1+ means armed
+    var body: some View {
+        let armed = progress >= 1
+        let height: CGFloat = max(0, progress * 80)
+        HStack(spacing: 10) {
+            Image(systemName: "plus.circle")
+                .font(.system(size: 10))
+            Text(armed ? "RELEASE TO CAPTURE" : "PULL TO CAPTURE")
+                .font(Theme.Font.mono(10))
+                .tracking(1.7)
+        }
+        .foregroundStyle(armed ? Theme.Palette.teal : Theme.Palette.inkFaint)
+        .frame(height: height)
+        .opacity(min(progress, 1))
+        .clipped()
+        .allowsHitTesting(false)
+        .animation(.easeOut(duration: 0.18), value: armed)
+    }
+}
+
+// ───────────────────── Bottom nav ─────────────────────
+struct BottomNav: View {
+    @Binding var active: RootView.AppTab
+    @Binding var chaptersTabFrame: CGRect
+
+    /// Frame of the active tab's *label* in our coord space — drives the
+    /// sliding underline.
+    @State private var labelFrames: [RootView.AppTab: CGRect] = [:]
+    /// On notification, pulses the Chapters tab once (used by Morning Page's
+    /// sentence-fly animation).
+    @State private var chaptersPulse: Bool = false
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(RootView.AppTab.allCases) { tab in
+                tabButton(tab)
+            }
+        }
+        .coordinateSpace(name: "bottomNav")
+        .overlay(alignment: .topLeading) {
+            // Sliding underline — animates between tabs.
+            if let frame = labelFrames[active] {
+                Rectangle()
+                    .fill(Theme.Palette.ink)
+                    .frame(width: frame.width * 0.55, height: 1.5)
+                    .offset(
+                        x: frame.minX + (frame.width - frame.width * 0.55) / 2,
+                        y: frame.maxY + 4
+                    )
+                    .animation(.spring(response: 0.36, dampingFraction: 0.8), value: active)
+            }
+        }
+        .padding(.horizontal, 22)
+        .padding(.top, 14)
+        .padding(.bottom, 8)
+        .background(Theme.Palette.paper)
+    }
+
+    @ViewBuilder
+    private func tabButton(_ tab: RootView.AppTab) -> some View {
+        let isActive = active == tab
+        let isChaptersTab = (tab == .chapters)
+        Button {
+            withAnimation(.spring(response: 0.36, dampingFraction: 0.82)) {
+                active = tab
+            }
+        } label: {
+            VStack(spacing: 6) {
+                navIcon(tab, isActive: isActive)
+                    .scaleEffect(isActive ? 1.08 : 1.0)
+                    .animation(.spring(response: 0.36, dampingFraction: 0.7), value: isActive)
+                    // Chapters tab — one-shot pulse triggered by Morning Page
+                    // sentence-fly animation arrival.
+                    .scaleEffect(isChaptersTab && chaptersPulse ? 1.18 : 1.0)
+                    .background(
+                        Group {
+                            if isChaptersTab && chaptersPulse {
+                                Circle()
+                                    .stroke(Theme.Palette.teal, lineWidth: 1.5)
+                                    .scaleEffect(2.4)
+                                    .opacity(0)
+                                    .animation(.easeOut(duration: 1.0), value: chaptersPulse)
+                            }
+                        }
+                    )
+                    .animation(.spring(response: 0.4, dampingFraction: 0.55), value: chaptersPulse)
+
+                Text(tab.label)
+                    .font(Theme.Font.serifItalic(13))
+                    .foregroundStyle(isActive ? Theme.Palette.ink : Theme.Palette.inkFainter)
+                    .background(
+                        GeometryReader { g in
+                            Color.clear
+                                .preference(
+                                    key: BottomNavFramePref.self,
+                                    value: [tab: g.frame(in: .named("bottomNav"))]
+                                )
+                        }
+                    )
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
+            .background(
+                // Publish the Chapters tab's outer frame in global coords for
+                // Morning Page's sentence-fly animation target.
+                Group {
+                    if isChaptersTab {
+                        GeometryReader { g in
+                            Color.clear
+                                .onAppear {
+                                    chaptersTabFrame = g.frame(in: .global)
+                                }
+                                .onChange(of: g.frame(in: .global)) { _, new in
+                                    chaptersTabFrame = new
+                                }
+                        }
+                    }
+                }
+            )
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Quick capture")
+        .onPreferenceChange(BottomNavFramePref.self) { dict in
+            labelFrames.merge(dict) { _, new in new }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .atlasChaptersTabPulse)) { _ in
+            chaptersPulse = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                chaptersPulse = false
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func navIcon(_ tab: RootView.AppTab, isActive: Bool) -> some View {
+        switch tab {
+        case .today:     TodayNavIcon(isActive: isActive)
+        case .chapters:  ChaptersNavIcon(isActive: isActive)
+        case .review:    ReviewNavIcon(isActive: isActive)
+        case .settings:  SettingsNavIcon(isActive: isActive)
+        }
+    }
+}
+
+/// Review — italic sun rising over a horizon line. Active state pops the sun.
+struct ReviewNavIcon: View {
+    let isActive: Bool
+    var body: some View {
+        let c: Color = isActive ? Theme.Palette.ink : Theme.Palette.inkFainter
+        ZStack {
+            // Horizon
+            Rectangle()
+                .fill(c)
+                .frame(width: 16, height: 1)
+                .offset(y: 5)
+            // Sun arc — half circle above horizon
+            Circle()
+                .trim(from: 0.5, to: 1.0)
+                .stroke(c, lineWidth: 1)
+                .frame(width: 12, height: 12)
+                .offset(y: 1)
+            // Centre pip
+            Circle()
+                .fill(c)
+                .frame(width: 3, height: 3)
+                .offset(y: 5)
+                .opacity(isActive ? 1 : 0)
+                .animation(.spring(response: 0.32, dampingFraction: 0.68), value: isActive)
+        }
+        .frame(width: 20, height: 20)
+    }
+}
+
+// ─── Per-tab icons with draw-on animations ─────────────────────────
+
+/// Today — outer ring traces in from 12 o'clock clockwise, then the centre
+/// dot pops with a soft spring.
+struct TodayNavIcon: View {
+    let isActive: Bool
+    @State private var ringTrim: CGFloat = 1
+    @State private var dotScale: CGFloat = 0
+
+    private let size: CGFloat = 20
+
+    var body: some View {
+        let c: Color = isActive ? Theme.Palette.ink : Theme.Palette.inkFainter
+        ZStack {
+            // Inactive resting ring — always visible so the tab never disappears
+            Circle()
+                .strokeBorder(c.opacity(isActive ? 0.0 : 1.0), lineWidth: 1)
+                .frame(width: size, height: size)
+
+            // Active overlay — traces in on activation
+            Circle()
+                .trim(from: 0, to: ringTrim)
+                .stroke(Theme.Palette.ink, style: StrokeStyle(lineWidth: 1, lineCap: .round))
+                .frame(width: size, height: size)
+                .rotationEffect(.degrees(-90))  // start at 12 o'clock
+                .opacity(isActive ? 1 : 0)
+
+            // Centre dot
+            Circle()
+                .fill(c)
+                .frame(width: 6, height: 6)
+                .scaleEffect(dotScale)
+        }
+        .onAppear { syncToActive(animated: false) }
+        .onChange(of: isActive) { _, _ in syncToActive(animated: true) }
+    }
+
+    private func syncToActive(animated: Bool) {
+        if isActive {
+            // Trace the ring + pop the dot
+            ringTrim = 0
+            withAnimation(animated ? .easeOut(duration: 0.32) : .none) {
+                ringTrim = 1
+            }
+            dotScale = 0
+            withAnimation(
+                animated
+                ? .spring(response: 0.32, dampingFraction: 0.68).delay(0.18)
+                : .none
+            ) {
+                dotScale = 1
+            }
+        } else {
+            withAnimation(animated ? .easeOut(duration: 0.18) : .none) {
+                ringTrim = 1
+                dotScale = 0
+            }
+        }
+    }
+}
+
+/// Chapters — three horizontal lines that extend from width 0 to their
+/// target widths with a 60ms stagger top→bottom.
+struct ChaptersNavIcon: View {
+    let isActive: Bool
+    @State private var widths: [CGFloat] = [16, 16, 10]
+    @State private var hasAppeared = false
+
+    private let targets: [CGFloat] = [16, 16, 10]
+
+    var body: some View {
+        let c: Color = isActive ? Theme.Palette.ink : Theme.Palette.inkFainter
+        VStack(alignment: .leading, spacing: 3) {
+            ForEach(0..<3, id: \.self) { i in
+                Capsule()
+                    .fill(c)
+                    .frame(width: widths[i], height: 1)
+            }
+        }
+        .frame(width: 20, height: 20, alignment: .center)
+        .onAppear {
+            if !hasAppeared { widths = targets; hasAppeared = true }
+        }
+        .onChange(of: isActive) { _, newValue in
+            if newValue { animateExtend() }
+        }
+    }
+
+    /// Reset to 0 and animate each line out to its target with stagger.
+    private func animateExtend() {
+        widths = [0, 0, 0]
+        for i in 0..<3 {
+            withAnimation(.easeOut(duration: 0.32).delay(Double(i) * 0.06)) {
+                widths[i] = targets[i]
+            }
+        }
+    }
+}
+
+/// Settings — two small circles connected by lines (top-left ⟶ right, bottom
+/// ⟵ middle-left). Lines extend from one circle to the other on activation;
+/// circles ease in slightly behind them.
+struct SettingsNavIcon: View {
+    let isActive: Bool
+    @State private var lineTrim: CGFloat = 1
+    @State private var circleScale: CGFloat = 1
+
+    var body: some View {
+        let c: Color = isActive ? Theme.Palette.ink : Theme.Palette.inkFainter
+        ZStack {
+            // Top row: small circle on left, line extending right
+            Group {
+                Circle()
+                    .strokeBorder(c, lineWidth: 1)
+                    .frame(width: 6, height: 6)
+                    .offset(x: -6, y: -6)
+                    .scaleEffect(circleScale, anchor: .center)
+                LineExtender(trim: lineTrim)
+                    .stroke(c, style: StrokeStyle(lineWidth: 1, lineCap: .round))
+                    .frame(width: 9, height: 1)
+                    .offset(x: 4, y: -6)
+            }
+            // Bottom row: line extending right, small circle on right
+            Group {
+                LineExtender(trim: lineTrim, flipped: true)
+                    .stroke(c, style: StrokeStyle(lineWidth: 1, lineCap: .round))
+                    .frame(width: 9, height: 1)
+                    .offset(x: -4, y: 6)
+                Circle()
+                    .strokeBorder(c, lineWidth: 1)
+                    .frame(width: 6, height: 6)
+                    .offset(x: 6, y: 6)
+                    .scaleEffect(circleScale, anchor: .center)
+            }
+        }
+        .frame(width: 20, height: 20)
+        .onChange(of: isActive) { _, newValue in
+            if newValue { animateExtend() }
+        }
+    }
+
+    private func animateExtend() {
+        circleScale = 0
+        lineTrim = 0
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.74)) {
+            circleScale = 1
+        }
+        withAnimation(.easeOut(duration: 0.34).delay(0.08)) {
+            lineTrim = 1
+        }
+    }
+}
+
+/// A horizontal line shape with a configurable trim (0 = nothing, 1 = full).
+/// Used so we can animate the line drawing on from one end.
+private struct LineExtender: Shape {
+    var trim: CGFloat
+    var flipped: Bool = false
+    var animatableData: CGFloat {
+        get { trim }
+        set { trim = newValue }
+    }
+    func path(in rect: CGRect) -> Path {
+        var p = Path()
+        let length = rect.width * trim
+        if flipped {
+            p.move(to: CGPoint(x: rect.maxX, y: rect.midY))
+            p.addLine(to: CGPoint(x: rect.maxX - length, y: rect.midY))
+        } else {
+            p.move(to: CGPoint(x: rect.minX, y: rect.midY))
+            p.addLine(to: CGPoint(x: rect.minX + length, y: rect.midY))
+        }
+        return p
+    }
+}
+
+private struct BottomNavFramePref: PreferenceKey {
+    static let defaultValue: [RootView.AppTab: CGRect] = [:]
+    static func reduce(value: inout [RootView.AppTab: CGRect], nextValue: () -> [RootView.AppTab: CGRect]) {
+        value.merge(nextValue()) { _, new in new }
     }
 }
