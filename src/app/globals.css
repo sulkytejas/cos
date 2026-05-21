@@ -3,15 +3,29 @@
 @theme {
   --color-paper: #faf7f2;
   --color-card: #ffffff;
+  --color-bg-elev: #ffffff;
+  --color-bg-sunk: #f5efe2;
   --color-border-warm: #e8e0cf;
   --color-border-warm-strong: #d8cdb5;
+  --color-hairline: #e8e0cf;
+  --color-hairline-soft: #efe7d6;
   --color-ink: #1a1814;
+  --color-ink-2: #3a342c;
+  --color-ink-3: #6b6256;
+  --color-ink-4: #9a8f82;
   --color-ink-secondary: #5c534a;
   --color-ink-faint: #9a8f82;
   --color-moss: #2d4a3a;
   --color-moss-soft: #3b5e4a;
   --color-ember: #c2410c;
   --color-ember-soft: #e35a1b;
+
+  /* v0.2 — teal + forest, matching the iOS app's accent system */
+  --color-teal: #0a6f7a;
+  --color-teal-deep: #084b53;
+  --color-teal-soft: #d4ebee;
+  --color-forest: #2d4a3a;
+  --color-forest-soft: #d8e1d8;
 
   --font-serif: "Instrument Serif", Georgia, ui-serif, serif;
   --font-sans: "Manrope", ui-sans-serif, system-ui, sans-serif;
@@ -280,4 +294,46 @@
 
 .fade-in {
   animation: fade-in 150ms ease both;
+}
+
+/* v0.2 — typographic primitives the brief library leans on */
+.serif-i {
+  font-family: var(--font-serif);
+  font-style: italic;
+}
+.micro {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--color-ink-3);
+}
+
+/* Editorial pulse dot used as a "live"/"next"/"pending" mark */
+.pulse-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-teal);
+  animation: pulse-dot 1.8s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(10, 111, 122, 0.35); opacity: 1; }
+  50%      { box-shadow: 0 0 0 5px rgba(10, 111, 122, 0); opacity: 0.55; }
+}
+
+@keyframes prov-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(10, 111, 122, 0.30); opacity: 1; }
+  50%      { box-shadow: 0 0 0 4px rgba(10, 111, 122, 0); opacity: 0.55; }
+}
+
+/* Pressable — slight depress on click, matches v0.1's vocabulary */
+.pressable {
+  transition: transform 150ms ease, opacity 150ms ease;
+}
+.pressable:active {
+  transform: translateY(1px) scale(0.985);
 }
