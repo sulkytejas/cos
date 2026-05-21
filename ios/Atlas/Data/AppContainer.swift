@@ -3,11 +3,18 @@ import SwiftData
 
 enum AppContainer {
     static let schema = Schema([
+        // v0.1
         Chapter.self,
         Todo.self,
         Decision.self,
         Entry.self,
-        ChapterLink.self
+        ChapterLink.self,
+        // v0.2 — agentic surface
+        Brief.self,
+        Watcher.self,
+        Proposal.self,
+        Signal.self,
+        AppEvent.self,
     ])
 
     static func make() -> ModelContainer {
@@ -28,7 +35,10 @@ enum AppContainer {
     static func seedIfEmpty(context: ModelContext) {
         let descriptor = FetchDescriptor<Chapter>()
         let existing = (try? context.fetchCount(descriptor)) ?? 0
-        guard existing == 0 else { return }
-        Seed.run(in: context)
+        if existing == 0 {
+            Seed.run(in: context)
+        }
+        // v0.2 — briefs / proposals / watchers, idempotent inside.
+        Task { @MainActor in SeedV2.run(in: context) }
     }
 }
