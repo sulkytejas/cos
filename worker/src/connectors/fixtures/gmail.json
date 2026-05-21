@@ -1,0 +1,45 @@
+[
+  {
+    "external_id": "gmail-karan-1",
+    "summary": "Karan Mohla — saw the deck, can we chat Thurs?",
+    "raw": {
+      "from": "karan@sequoiacap.com",
+      "to": "tejas@stratyfix.com",
+      "subject": "Saw the deck",
+      "body": "Tejas — went through v3 last night. Want to talk through retention; specifically your month-6 cohort and how you're thinking about the pivot away from self-hosted. Thursday 2:30pm work?",
+      "received_at": "2026-05-21T06:12:00+05:30"
+    }
+  },
+  {
+    "external_id": "gmail-trinity-1",
+    "summary": "Trinity registrar — I-20 equivalent confirmation",
+    "raw": {
+      "from": "registry@tcd.ie",
+      "to": "tejas@gmail.com",
+      "subject": "Your enrollment documents",
+      "body": "Dear Tejas, we confirm receipt of your IELTS results. Please return the signed enrollment form by May 31 to complete your I-20 equivalent registration. Best, Trinity College Registry",
+      "received_at": "2026-05-21T05:48:00+05:30"
+    }
+  },
+  {
+    "external_id": "gmail-vfs-1",
+    "summary": "VFS — appointment slot update",
+    "raw": {
+      "from": "no-reply@vfsglobal.com",
+      "to": "tejas@gmail.com",
+      "subject": "Visa appointment availability",
+      "body": "We currently have a limited number of appointment slots available before June 28 for Irish study permits. Slots are released daily at 10:00 IST.",
+      "received_at": "2026-05-21T04:18:00+05:30"
+    }
+  },
+  {
+    "external_id": "gmail-newsletter-1",
+    "summary": "Stratechery — Monday's piece",
+    "raw": {
+      "from": "ben@stratechery.com",
+      "subject": "Monday: AI Companies vs AI Features",
+      "body": "(newsletter body, filed quietly)",
+      "received_at": "2026-05-21T05:31:00+05:30"
+    }
+  }
+]

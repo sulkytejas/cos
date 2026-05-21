@@ -1,0 +1,33 @@
+[
+  {
+    "external_id": "cal-karan-1",
+    "summary": "Karan Mohla — partner intro",
+    "raw": {
+      "title": "Karan Mohla — partner intro · Sequoia",
+      "startsAt": "2026-05-21T14:30:00+05:30",
+      "endsAt": "2026-05-21T15:00:00+05:30",
+      "location": "Zoom",
+      "attendees": ["karan@sequoiacap.com", "tejas@stratyfix.com"]
+    }
+  },
+  {
+    "external_id": "cal-sitting-1",
+    "summary": "Sitting with V. — Bandra studio",
+    "raw": {
+      "title": "Sitting with V. — Bandra studio",
+      "startsAt": "2026-05-22T11:00:00+05:30",
+      "endsAt": "2026-05-22T12:30:00+05:30",
+      "location": "Bandra studio (new — above the bakery, code 4417)"
+    }
+  },
+  {
+    "external_id": "cal-lightspeed-1",
+    "summary": "Lightspeed intro call",
+    "raw": {
+      "title": "Lightspeed intro — Aanand",
+      "startsAt": "2026-05-23T16:00:00+05:30",
+      "endsAt": "2026-05-23T16:30:00+05:30",
+      "location": "Phone"
+    }
+  }
+]
