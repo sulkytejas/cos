@@ -1,86 +1,35 @@
 import SwiftUI
 import SwiftData
 
+/// Journal — passive + manual entries woven together as a single feed.
+/// Each entry is a hairline-divided row: source label + relative time +
+/// the entry text. Passive sources (Email/Calendar/Drive) render at 78%
+/// opacity in lighter ink so manual entries quietly dominate the page.
+/// No add card — new entries arrive via the global Capture sheet.
 struct JournalTab: View {
     @Bindable var chapter: Chapter
     @Environment(\.modelContext) private var context
-    @State private var draft = ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            addCard
-            entriesList
-        }
-    }
-
-    private var addCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            TextEditor(text: $draft)
-                .frame(minHeight: 80)
-                .font(Theme.Font.sans(14))
-                .foregroundStyle(Theme.Palette.ink)
-                .scrollContentBackground(.hidden)
-                .background(Color.clear)
-                .overlay(alignment: .topLeading) {
-                    if draft.isEmpty {
-                        Text("Note something. A thought, a meeting, a turn.")
-                            .font(Theme.Font.sans(14))
-                            .foregroundStyle(Theme.Palette.inkFaint)
-                            .padding(.top, 8)
-                            .padding(.leading, 4)
-                            .allowsHitTesting(false)
+        let sorted = chapter.entries.sorted(by: { $0.date > $1.date })
+        if sorted.isEmpty {
+            Text("Nothing logged yet.")
+                .font(Theme.Font.serifItalic(15))
+                .foregroundStyle(Theme.Palette.inkFaint)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.vertical, 24)
+        } else {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(sorted.enumerated()), id: \.element.id) { idx, e in
+                    EntryRow(entry: e) {
+                        context.delete(e); try? context.save()
                     }
-                }
-            Hairline()
-            HStack {
-                Spacer()
-                Button {
-                    addEntry()
-                } label: {
-                    Label("Add entry", systemImage: "plus")
-                }
-                .buttonStyle(.atlasPrimary)
-                .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-        }
-        .padding(16)
-        .card()
-    }
-
-    private var entriesList: some View {
-        Group {
-            if chapter.entries.isEmpty {
-                Text("Nothing logged yet.")
-                    .font(Theme.Font.sans(14))
-                    .foregroundStyle(Theme.Palette.inkFaint)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 32)
-            } else {
-                VStack(spacing: 0) {
-                    let sorted = chapter.entries.sorted(by: { $0.date > $1.date })
-                    ForEach(Array(sorted.enumerated()), id: \.element.id) { idx, e in
-                        EntryRow(entry: e) {
-                            context.delete(e)
-                            try? context.save()
-                        }
-                        if idx < sorted.count - 1 {
-                            Hairline()
-                                .padding(.leading, 100)
-                        }
+                    if idx < sorted.count - 1 {
+                        Hairline().opacity(0.5)
                     }
                 }
             }
         }
-    }
-
-    private func addEntry() {
-        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        let entry = Entry(content: trimmed, chapter: chapter)
-        context.insert(entry)
-        chapter.touch()
-        try? context.save()
-        draft = ""
     }
 }
 
@@ -88,27 +37,30 @@ struct EntryRow: View {
     let entry: Entry
     let onDelete: () -> Void
 
-    var body: some View {
-        HStack(alignment: .top, spacing: 20) {
-            VStack(alignment: .trailing, spacing: 2) {
-                MetaLabel(text: AtlasFormat.shortDay.string(from: entry.date))
-                Text(AtlasFormat.relative(entry.date))
-                    .font(Theme.Font.mono(9))
-                    .foregroundStyle(Theme.Palette.inkFaint)
-            }
-            .frame(width: 80, alignment: .trailing)
+    private var passive: Bool { entry.source != .manual }
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text(entry.content)
-                    .font(Theme.Font.sans(15))
-                    .foregroundStyle(Theme.Palette.ink)
-                    .lineSpacing(3)
-                Chip(text: entry.source.rawValue,
-                     tone: entry.source == .manual ? .neutral : .moss)
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .center, spacing: 8) {
+                Text(entry.source.rawValue.uppercased())
+                    .font(Theme.Font.mono(9.5))
+                    .tracking(1.8)
+                    .foregroundStyle(passive ? Theme.Palette.inkFainter : Theme.Palette.teal)
+                Text("·")
+                    .foregroundStyle(Theme.Palette.inkFainter)
+                Text(AtlasFormat.relative(entry.date))
+                    .font(Theme.Font.mono(9.5))
+                    .foregroundStyle(Theme.Palette.inkFainter)
             }
-            Spacer()
+            Text(entry.content)
+                .font(.system(size: 14,
+                              weight: passive ? .regular : .medium,
+                              design: .default))
+                .foregroundStyle(passive ? Theme.Palette.inkSecondary : Theme.Palette.ink)
+                .lineSpacing(3)
         }
-        .padding(.vertical, 16)
+        .opacity(passive ? 0.78 : 1.0)
+        .padding(.vertical, 12)
         .contextMenu {
             Button(role: .destructive, action: onDelete) {
                 Label("Delete", systemImage: "trash")

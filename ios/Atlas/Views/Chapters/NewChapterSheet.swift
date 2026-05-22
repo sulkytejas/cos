@@ -87,7 +87,20 @@ struct NewChapterSheet: View {
             purpose: purpose.trimmingCharacters(in: .whitespaces).isEmpty ? nil : purpose.trimmingCharacters(in: .whitespaces)
         )
         context.insert(chapter)
+        // Emit an AppEvent so the agent can propose starter todos + a watcher
+        // for the new chapter. Captured as an event (not a direct call) so it
+        // flows through the same queue as captures and watchers.
+        context.insert(AppEvent(
+            type: .chapterCreated,
+            payload: ChapterCreatedPayload(chapterID: chapter.id)
+        ))
         try? context.save()
+        // Fire icon generation if a Gemini key is set. Doesn't block dismissal —
+        // the user sees the italic-letter fallback until the image lands.
+        Task { await IconGenerator.regenerate(chapter, in: context) }
+        // Nudge the agent so the user sees proposals appear quickly rather
+        // than waiting for the next 30s tick.
+        Task { await AtlasAgent.shared.tickOnce() }
         dismiss()
     }
 }

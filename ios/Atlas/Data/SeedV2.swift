@@ -84,7 +84,7 @@ enum SeedV2 {
             drafted: "drafted 06:40",
             preview: "Likely to push on retention. He runs late — plan for 20 minutes, not 30.",
             primaryAction: "Open deck v3",
-            secondaryActions: ["Snooze 1h", "Ask Atlas to dig deeper"]
+            secondaryActions: ["Snooze 1h", "Ask Ayumi to dig deeper"]
         ))
 
         // 2. Portrait sitting
@@ -141,7 +141,7 @@ enum SeedV2 {
             drafted: "drafted 06:40",
             preview: "She runs warm light all morning. Wear something matte, not pressed.",
             primaryAction: "Open route to studio",
-            secondaryActions: ["Snooze", "Ask Atlas to dig deeper"]
+            secondaryActions: ["Snooze", "Ask Ayumi to dig deeper"]
         ))
 
         // 3. Trip approaching
@@ -185,7 +185,7 @@ enum SeedV2 {
             drafted: "drafted 06:40",
             preview: "Pack list is light; cash and offline maps matter more than gear.",
             primaryAction: "Open packing list",
-            secondaryActions: ["Snooze", "Ask Atlas to dig deeper"]
+            secondaryActions: ["Snooze", "Ask Ayumi to dig deeper"]
         ))
 
         // ─── Watchers ────────────────────────────────────────────

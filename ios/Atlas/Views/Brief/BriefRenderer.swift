@@ -18,7 +18,7 @@ struct BriefRenderer: View {
                 }
             }
         } else {
-            FallbackSection(label: "Atlas couldn't shape this brief — structure is malformed.")
+            FallbackSection(label: "Ayumi couldn't shape this brief — structure is malformed.")
         }
     }
 
@@ -36,7 +36,7 @@ struct BriefRenderer: View {
         case .diff(let d):       DiffBlock(data: d)
         case .action(let d):     ActionStripSection(data: d)
         case .unknown(let kind, _):
-            FallbackSection(label: "Atlas wanted a \(kind) section that isn't built yet.")
+            FallbackSection(label: "Ayumi wanted a \(kind) section that isn't built yet.")
         }
     }
 }

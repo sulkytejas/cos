@@ -7,15 +7,22 @@ struct RootView: View {
     @State private var showCapture = false
     @State private var pullProgress: CGFloat = 0   // 0..1.2 (1+ = armed)
     @State private var didKickOffIcons = false
+    /// Ticks once a minute so any TimeBand-derived labels (tab name, page
+    /// titles, eyebrows) update live when the clock crosses a band boundary
+    /// without forcing the user to relaunch.
+    @State private var clockTick: Int = 0
 
     enum AppTab: String, CaseIterable, Identifiable {
         case today, chapters, review, settings
         var id: String { rawValue }
+        /// User-visible label. Note the third tab's case is `.review` for code
+        /// continuity but the user-facing label shifts with the time of day
+        /// (Morning / Afternoon / Evening / Night) via TimeBand.current.
         var label: String {
             switch self {
             case .today: return "Today"
             case .chapters: return "Chapters"
-            case .review: return "Review"
+            case .review: return TimeBand.current.tabLabel
             case .settings: return "Settings"
             }
         }
@@ -37,7 +44,12 @@ struct RootView: View {
                         case .today:
                             NavigationStack {
                                 TodayView(pullProgress: $pullProgress,
-                                          onPullCapture: { showCapture = true })
+                                          onPullCapture: { showCapture = true },
+                                          onOpenMorning: {
+                                              withAnimation(.easeInOut(duration: 0.32)) {
+                                                  tab = .review
+                                              }
+                                          })
                             }
                         case .chapters:
                             NavigationStack { ChaptersListView() }
@@ -80,6 +92,9 @@ struct RootView: View {
             didKickOffIcons = true
             await IconGenerator.generateMissing(in: modelContext)
         }
+        .onReceive(Timer.publish(every: 60, on: .main, in: .common).autoconnect()) { _ in
+            clockTick &+= 1
+        }
     }
 }
 
@@ -89,18 +104,14 @@ struct AtlasHeader: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
-            // App mark — peak rising above a horizon
-            AtlasLogo(size: 24)
-                .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 4, style: .continuous)
-                        .strokeBorder(Theme.Palette.hairline, lineWidth: 1)
-                )
+            // Brand mark — the brushed A from Icon options.html.
+            // Per the v0.3 design: same brush, two glyphs (A here, 歩 on splash).
+            BrushedA(size: 22)
 
-            Text("Atlas")
+            Text("Ayumi")
                 .font(Theme.Font.serifItalic(22))
                 .foregroundStyle(Theme.Palette.ink)
-            Text("v0.1")
+            Text("v0.3")
                 .font(Theme.Font.mono(9.5))
                 .tracking(1.0)
                 .foregroundStyle(Theme.Palette.inkFainter)
@@ -293,32 +304,156 @@ struct BottomNav: View {
     }
 }
 
-/// Review — italic sun rising over a horizon line. Active state pops the sun.
+/// Review — the icon shifts with the time of day. Per the v0.3 Night-icon
+/// handoff, all four states share the same hairline-stroke recipe as the
+/// other nav icons (1-pt stroke, fill: none):
+///
+///   morning / afternoon / evening → shared sun-arc + a small filled dot
+///   positioned on the arc (left / top / right). The arc is identical across
+///   the three so the swap reads as "same place, different time".
+///   night → hairline crescent moon, with the inner arc's radius computed
+///   from the actual current lunar phase.
+///
+/// The dot rhymes with Today's filled center dot — same family.
 struct ReviewNavIcon: View {
     let isActive: Bool
+    private var band: TimeBand { TimeBand.current }
+
     var body: some View {
         let c: Color = isActive ? Theme.Palette.ink : Theme.Palette.inkFainter
         ZStack {
-            // Horizon
-            Rectangle()
-                .fill(c)
-                .frame(width: 16, height: 1)
-                .offset(y: 5)
-            // Sun arc — half circle above horizon
-            Circle()
-                .trim(from: 0.5, to: 1.0)
-                .stroke(c, lineWidth: 1)
-                .frame(width: 12, height: 12)
-                .offset(y: 1)
-            // Centre pip
-            Circle()
-                .fill(c)
-                .frame(width: 3, height: 3)
-                .offset(y: 5)
-                .opacity(isActive ? 1 : 0)
-                .animation(.spring(response: 0.32, dampingFraction: 0.68), value: isActive)
+            switch band {
+            case .night:
+                MoonCrescentShape(phase: TimeBand.moonPhase())
+                    .stroke(c, style: StrokeStyle(lineWidth: 1, lineJoin: .round))
+                    .frame(width: 20, height: 20)
+            default:
+                SunArc()
+                    .stroke(c, style: StrokeStyle(lineWidth: 1, lineCap: .round))
+                    .frame(width: 20, height: 20)
+                // Filled dot positioned along the arc. r = 1.8 in the 20×20
+                // viewBox; the position changes per band.
+                Circle()
+                    .fill(c)
+                    .frame(width: 3.6, height: 3.6)
+                    .position(sunDotPosition(for: band))
+            }
         }
         .frame(width: 20, height: 20)
+        .animation(.easeInOut(duration: 0.32), value: band)
+    }
+
+    /// Dot position inside the 20×20 viewBox for each daytime band.
+    /// Coordinates are taken directly from the Night-icon handoff.
+    private func sunDotPosition(for band: TimeBand) -> CGPoint {
+        switch band {
+        case .morning:   return CGPoint(x: 4.5,  y: 10.7)   // sun rising on the left
+        case .afternoon: return CGPoint(x: 10,   y: 7.2)    // sun at peak
+        case .evening:   return CGPoint(x: 15.5, y: 10.7)   // sun descending on the right
+        case .night:     return .zero                       // not used
+        }
+    }
+}
+
+/// SunArc — the shared semicircle the daytime nav icons live on.
+/// SVG: `M 3 14 A 7 7 0 0 1 17 14` — an arc centred at (10, 14) with r=7,
+/// drawn from the left horizon up over the top to the right horizon.
+struct SunArc: Shape {
+    func path(in rect: CGRect) -> Path {
+        let s = min(rect.width, rect.height) / 20.0
+        var p = Path()
+        p.move(to: CGPoint(x: 3 * s, y: 14 * s))
+        // In iOS coords (y down), 180° is left, 0° is right, 270° is the top.
+        // Going from 180° → 0° via 270° = counter-clockwise in screen terms.
+        p.addArc(
+            center: CGPoint(x: 10 * s, y: 14 * s),
+            radius: 7 * s,
+            startAngle: .degrees(180),
+            endAngle: .degrees(360),
+            clockwise: false
+        )
+        return p
+    }
+}
+
+/// MoonCrescentShape — the canonical handoff path translated to SwiftUI.
+///
+/// Path recipe (SVG):
+///   M cx (cy-r)
+///   A r r 0 0 outerSweep cx (cy+r)
+///   A innerRx r 0 0 innerSweep cx (cy-r) Z
+///
+/// where:
+///   t = waxing ? (phase*4 - 1) : (3 - phase*4)   // -1 (new) → 0 (qtr) → 1 (full)
+///   outerSweep = waxing ? 1 : 0
+///   innerSweep = (waxing == (t > 0)) ? 1 : 0
+///   innerRx    = |t| * r
+///
+/// Outer arc is always a half-circle; inner arc is a half-ellipse whose
+/// horizontal radius slides with the phase. At full moon innerRx == r so the
+/// inner arc coincides with the outer, drawing a complete circle (correct).
+/// At new moon they coincide in the opposite direction — also reads as a
+/// circle in stroke, which is acceptable since a moon outline at new is the
+/// only honest representation.
+struct MoonCrescentShape: Shape {
+    /// 0 = new · 0.25 = first quarter · 0.5 = full · 0.75 = last quarter
+    var phase: Double
+
+    func path(in rect: CGRect) -> Path {
+        let s = min(rect.width, rect.height) / 20.0     // scale to 20×20 viewBox
+        let cx: CGFloat = 10 * s
+        let cy: CGFloat = 10 * s
+        let r:  CGFloat = 7  * s
+        let waxing = phase < 0.5
+        let t = waxing ? (phase * 4 - 1) : (3 - phase * 4)
+        let innerRx = CGFloat(abs(t)) * r
+
+        var p = Path()
+        let top = CGPoint(x: cx, y: cy - r)
+        let bot = CGPoint(x: cx, y: cy + r)
+
+        // ── Outer arc: half-circle from top to bottom ─────────────────────
+        // Waxing crescents have the lit side on the right; waning on the left.
+        // SVG outerSweep=1 (waxing) maps to "clockwise on screen", which in
+        // SwiftUI's iOS coords means `clockwise: true`.
+        p.move(to: top)
+        p.addArc(
+            center: CGPoint(x: cx, y: cy), radius: r,
+            startAngle: .degrees(-90), endAngle: .degrees(90),
+            clockwise: !waxing
+        )
+
+        // ── Inner arc: half-ellipse from bottom back to top ───────────────
+        // Bulge direction depends on the four quadrants of the phase:
+        //   waxing crescent (t<0): bulge LEFT (terminator cuts into right half)
+        //   waxing gibbous  (t>0): bulge RIGHT
+        //   waning gibbous  (t>0): bulge LEFT
+        //   waning crescent (t<0): bulge RIGHT
+        let bulgeDir: CGFloat = {
+            switch (waxing, t > 0) {
+            case (true,  false): return -1   // waxing crescent
+            case (true,  true):  return  1   // waxing gibbous
+            case (false, true):  return -1   // waning gibbous
+            case (false, false): return  1   // waning crescent
+            }
+        }()
+        let bulge = bulgeDir * innerRx
+        let k: CGFloat = 0.5522847498   // cubic-bezier circle/ellipse constant
+
+        // Half-ellipse via two quarter cubic beziers — SwiftUI Path doesn't
+        // expose an elliptical arc directly, so we approximate.
+        p.addCurve(
+            to: CGPoint(x: cx + bulge, y: cy),
+            control1: CGPoint(x: cx + bulge * k, y: bot.y),
+            control2: CGPoint(x: cx + bulge,     y: cy + r * k)
+        )
+        p.addCurve(
+            to: top,
+            control1: CGPoint(x: cx + bulge,     y: cy - r * k),
+            control2: CGPoint(x: cx + bulge * k, y: top.y)
+        )
+        p.closeSubpath()
+        return p
     }
 }
 

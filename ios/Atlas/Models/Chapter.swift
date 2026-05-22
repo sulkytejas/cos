@@ -13,6 +13,14 @@ final class Chapter {
     var createdAt: Date
     var updatedAt: Date
 
+    /// PNG bytes of an AI-generated icon. Plain Data (no externalStorage)
+    /// because external storage prevents SwiftData/@Query from firing view
+    /// updates when the blob arrives.
+    var iconData: Data?
+    /// The title used when iconData was generated. If different from the
+    /// current title, the icon is stale and should be regenerated.
+    var iconSourceTitle: String?
+
     @Relationship(deleteRule: .cascade, inverse: \Todo.chapter)
     var todos: [Todo] = []
 

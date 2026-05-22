@@ -44,7 +44,7 @@ struct MorningView: View {
         let parts: [String] = [
             totals["todo"].map { "\($0) todo\($0 == 1 ? "" : "s")" },
             totals["decision"].map { "\($0) decision\($0 == 1 ? "" : "s")" },
-            totals["journal"].map { "\($0) journal \($0 == 1 ? "note" : "notes")" },
+            totals["journal"].map { "\($0) journal\($0 == 1 ? "" : "s")" },
         ].compactMap { $0 }
         guard parts.count > 0 else { return "" }
         if parts.count == 1 { return parts[0] }
@@ -89,7 +89,7 @@ struct MorningView: View {
                 .font(Theme.Font.mono(9.5))
                 .tracking(2.0)
                 .foregroundStyle(Theme.Palette.inkFaint)
-            Text("This morning")
+            Text(TimeBand.current.pageTitle)
                 .font(Theme.Font.serifItalic(48))
                 .foregroundStyle(Theme.Palette.ink)
                 .lineSpacing(2)
@@ -185,8 +185,8 @@ struct MorningView: View {
             .disabled(flying != nil)
             .opacity(flying != nil ? 0.55 : 1)
 
-            Button { /* AskAtlas — Phase 2 */ } label: {
-                Text("Ask Atlas")
+            Button { /* AskAyumi — Phase 2 */ } label: {
+                Text("Ask Ayumi")
                     .font(Theme.Font.serifItalic(14))
                     .foregroundStyle(Theme.Palette.inkSecondary)
                     .padding(.horizontal, 16)
@@ -208,7 +208,7 @@ struct MorningView: View {
                 .font(Theme.Font.mono(9.5))
                 .tracking(2.0)
                 .foregroundStyle(Theme.Palette.forest)
-            Text("Your morning is in the chapters." +
+            Text("Your \(TimeBand.current.filedNoun) is in the chapters." +
                  (countsText.isEmpty ? "" : " \(countsText), all in place."))
                 .font(Theme.Font.serifItalic(16))
                 .foregroundStyle(Theme.Palette.ink)
@@ -416,7 +416,7 @@ struct SentenceRow: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top) {
                 Text(override ?? sentence.text)
-                    .font(.system(size: isStruck ? 13 : 19, design: .serif))
+                    .font(Theme.Font.serif(isStruck ? 13 : 19))
                     .foregroundStyle(isStruck ? Theme.Palette.inkFainter : Theme.Palette.ink)
                     .lineSpacing(isStruck ? 1.35 - 1 : 1.42 - 1)
                     .opacity(isStruck ? 0.7 : 1)
@@ -457,7 +457,7 @@ struct SentenceRow: View {
 
             if isRefining {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("NUDGE ATLAS")
+                    Text("NUDGE AYUMI")
                         .font(Theme.Font.mono(9))
                         .tracking(2.0)
                         .foregroundStyle(Theme.Palette.tealDeep)

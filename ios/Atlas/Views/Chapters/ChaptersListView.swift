@@ -3,129 +3,204 @@ import SwiftData
 
 struct ChaptersListView: View {
     @Query(sort: \Chapter.updatedAt, order: .reverse) private var chapters: [Chapter]
+    @Query private var links: [ChapterLink]
+    @Query private var todos: [Todo]
+
+    @State private var viewMode: ViewMode = .map
+    @State private var focusedID: UUID? = nil
+    @State private var pendingChapter: Chapter? = nil
     @State private var showNew = false
+
+    enum ViewMode: String, Identifiable {
+        case map, list
+        var id: String { rawValue }
+    }
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 28) {
+            VStack(alignment: .leading, spacing: 0) {
                 header
-                ForEach(ChapterStatus.allCases.sorted { $0.sortIndex < $1.sortIndex }, id: \.self) { status in
-                    let inGroup = chapters.filter { $0.status == status }
-                    if !inGroup.isEmpty {
-                        section(title: status.label, count: inGroup.count, chapters: inGroup)
-                    }
+
+                if viewMode == .map {
+                    mapBody
+                } else {
+                    listBody
                 }
+
+                Spacer().frame(height: 110)
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 20)
-            .padding(.bottom, 100)
+            .padding(.top, 18)
         }
-        .background(Theme.Palette.paper.ignoresSafeArea())
+        .background(Theme.Palette.paper)
         .navigationBarHidden(true)
-        .sheet(isPresented: $showNew) {
-            NewChapterSheet()
+        .navigationDestination(for: Chapter.self) { ch in
+            ChapterDetailView(chapter: ch)
         }
-        .navigationDestination(for: Chapter.self) { c in
-            ChapterDetailView(chapter: c)
-        }
+        .sheet(isPresented: $showNew) { NewChapterSheet() }
     }
 
+    // ─── Header ────────────────────────────────────────────────────
     private var header: some View {
         HStack(alignment: .bottom) {
             VStack(alignment: .leading, spacing: 4) {
-                MetaLabel(text: "All arcs")
+                MicroText(text: "All arcs")
                 Text("Chapters")
-                    .font(Theme.Font.titleLarge)
+                    .font(Theme.Font.serif(46))
                     .foregroundStyle(Theme.Palette.ink)
             }
             Spacer()
-            Button {
-                showNew = true
-            } label: {
-                Label("New chapter", systemImage: "plus")
+            AtlasViewToggle(
+                options: [
+                    .init(id: ViewMode.map, label: "Map"),
+                    .init(id: ViewMode.list, label: "List"),
+                ],
+                selection: $viewMode
+            )
+        }
+        .padding(.horizontal, 22)
+    }
+
+    // ─── Map view ──────────────────────────────────────────────────
+    private var mapBody: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Spacer().frame(height: 22)
+            ConstellationView(
+                chapters: chapters,
+                edges: links,
+                todos: todos,
+                focusedID: $focusedID,
+                onOpen: { ch in pendingChapter = ch }
+            )
+            // Below the constellation: swaps between BLOCKS/ENABLES/CONFLICTS
+            // legend (when nothing is focused) and the "tap × to return" hint
+            // (when a chapter is focused).
+            ZStack {
+                if focusedID == nil {
+                    legend
+                        .transition(.opacity)
+                } else {
+                    Text("Tap the × to return to the constellation")
+                        .font(Theme.Font.serifItalic(13))
+                        .foregroundStyle(Theme.Palette.inkFaint)
+                        .transition(.opacity)
+                }
             }
-            .buttonStyle(.atlasPrimary)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 22)
+            .padding(.top, 14)
+            .animation(.easeOut(duration: 0.28), value: focusedID)
+        }
+        .navigationDestination(item: $pendingChapter) { ch in
+            ChapterDetailView(chapter: ch)
         }
     }
 
-    private func section(title: String, count: Int, chapters: [Chapter]) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            SectionHeader(title, trailing: "\(count)")
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 12)], spacing: 12) {
-                ForEach(chapters) { c in
-                    NavigationLink(value: c) {
-                        ChapterCard(chapter: c)
+    private var legend: some View {
+        HStack(spacing: 14) {
+            LegendDot(label: "blocks", color: Theme.Palette.teal)
+            LegendDot(label: "enables", color: Theme.Palette.forest)
+            LegendDot(label: "conflicts", color: Theme.Palette.teal, dashed: true)
+        }
+    }
+
+    private struct LegendDot: View {
+        let label: String
+        let color: Color
+        var dashed: Bool = false
+        var body: some View {
+            HStack(spacing: 6) {
+                Rectangle()
+                    .strokeBorder(color,
+                                  style: StrokeStyle(lineWidth: 1.2, dash: dashed ? [3, 3] : []))
+                    .frame(width: 20, height: 1.2)
+                Text(label.uppercased())
+                    .font(Theme.Font.mono(9))
+                    .tracking(1.5)
+                    .foregroundStyle(Theme.Palette.inkFaint)
+            }
+        }
+    }
+
+    // ─── List view ─────────────────────────────────────────────────
+    private var listBody: some View {
+        let groups: [(label: String, items: [Chapter])] = [
+            ("Active",   chapters.filter { $0.status == .active }),
+            ("Upcoming", chapters.filter { $0.status == .upcoming }),
+            ("Paused",   chapters.filter { $0.status == .paused }),
+            ("Complete", chapters.filter { $0.status == .done }),
+        ].filter { !$0.items.isEmpty }
+
+        return VStack(alignment: .leading, spacing: 0) {
+            ForEach(groups, id: \.label) { group in
+                RibbonHeader(title: group.label, meta: "\(group.items.count)")
+                    .padding(.horizontal, 22)
+                VStack(spacing: 12) {
+                    ForEach(Array(group.items.enumerated()), id: \.element.id) { idx, ch in
+                        NavigationLink(value: ch) {
+                            ChapterCardFull(chapter: ch)
+                        }
+                        .buttonStyle(.pressScale)
+                        .staggerReveal(index: idx, step: 0.09)
                     }
-                    .buttonStyle(.plain)
                 }
+                .padding(.horizontal, 22)
             }
         }
     }
 }
 
-struct ChapterCard: View {
+struct ChapterCardFull: View {
     let chapter: Chapter
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .top) {
-                HStack(spacing: 6) {
-                    Image(systemName: chapter.type.sfSymbol)
-                        .font(.system(size: 13))
-                        .foregroundStyle(Theme.Palette.inkSecondary)
-                    MetaLabel(text: chapter.type.label)
-                }
+            HStack(spacing: 10) {
+                ChapterGlyphView(letter: chapter.glyph, iconData: chapter.iconData, accent: chapter.accent, size: 26)
+                MicroText(text: chapter.type.label)
                 Spacer()
-                MetaLabel(text: AtlasFormat.range(chapter.startDate, chapter.endDate))
+                Text(chapter.rangeShort)
+                    .font(Theme.Font.mono(10))
+                    .foregroundStyle(Theme.Palette.inkFainter)
             }
-
             Text(chapter.title)
-                .font(Theme.Font.serif(26))
+                .font(Theme.Font.serif(24))
                 .foregroundStyle(Theme.Palette.ink)
-                .padding(.top, 12)
-                .multilineTextAlignment(.leading)
-
+                .padding(.top, 10)
+                .lineLimit(2)
             if let p = chapter.purpose {
                 Text(p)
                     .font(Theme.Font.sans(13))
                     .foregroundStyle(Theme.Palette.inkSecondary)
-                    .lineLimit(2)
-                    .padding(.top, 8)
+                    .lineSpacing(3)
+                    .padding(.top, 6)
+                    .lineLimit(3)
             }
-
-            VStack(spacing: 6) {
-                HStack {
-                    Text("\(chapter.doneTodos.count) / \(chapter.todos.count) todos")
-                        .font(Theme.Font.mono(11))
-                        .foregroundStyle(Theme.Palette.inkFaint)
-                    Spacer()
-                    Text("\(Int(chapter.progress * 100))%")
-                        .font(Theme.Font.mono(11))
-                        .foregroundStyle(Theme.Palette.inkFaint)
-                }
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        RoundedRectangle(cornerRadius: 2)
-                            .fill(Theme.Palette.borderWarm)
-                            .frame(height: 3)
-                        RoundedRectangle(cornerRadius: 2)
-                            .fill(Theme.Palette.moss)
-                            .frame(width: geo.size.width * chapter.progress, height: 3)
-                    }
-                }
-                .frame(height: 3)
+            HStack(spacing: 10) {
+                Text("\(chapter.doneTodos.count) / \(chapter.todos.count) todos")
+                    .font(Theme.Font.mono(10.5))
+                    .foregroundStyle(Theme.Palette.inkFaint)
+                HairlineProgress(done: chapter.doneTodos.count,
+                                 total: chapter.todos.count,
+                                 accent: chapter.accent)
+                Text("\(Int(chapter.progress * 100))%")
+                    .font(Theme.Font.mono(10.5))
+                    .foregroundStyle(chapter.accent.stroke)
             }
-            .padding(.top, 20)
+            .padding(.top, 14)
 
+            Hairline().opacity(0.5).padding(.top, 12)
             HStack {
-                MetaLabel(text: chapter.status.rawValue)
+                StatePill(status: chapter.status)
                 Spacer()
-                MetaLabel(text: "updated \(AtlasFormat.relative(chapter.updatedAt))")
+                Text("UPDATED \(AtlasFormat.relative(chapter.updatedAt))".uppercased())
+                    .font(Theme.Font.mono(9.5))
+                    .tracking(1.4)
+                    .foregroundStyle(Theme.Palette.inkFainter)
             }
-            .padding(.top, 12)
+            .padding(.top, 10)
         }
+        .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
         .card()
     }
 }

@@ -13,6 +13,10 @@ struct TodayView: View {
     @State private var briefDone = false
     @Binding var pullProgress: CGFloat
     let onPullCapture: () -> Void
+    /// Closure handed down from RootView — switches the active tab to .review
+    /// (the Morning page). Invoked when the user taps the "I sat with last
+    /// night" entry-point on Today.
+    let onOpenMorning: () -> Void
 
     private static let calendarEvents: [HourEvent] = [
         .init(time: "09:00", title: "Deep work block",          meta: "Deck v3, slides 1–6", glyph: "D", durationMin: 120),
@@ -31,17 +35,20 @@ struct TodayView: View {
                 dateHeader
                 nextMilestoneStrip
 
+                // v0.2 canonical order (per atlas-screens.jsx live screen):
+                //  date → next → I-sat-with-last-night → Tempo →
+                //  Morning Brief → Briefs → Up next → Chapters → Atlas watching
+                iSatWithLastNightStrip
+
                 Spacer().frame(height: 26)
                 TempoNow(events: Self.calendarEvents,
                          todoHours: todoHoursToday())
 
-                handledOvernightStrip
-                briefsForTodaySection
-                atlasWatchingSection
-
                 morningBrief
+                briefsForTodaySection
                 upNextSection
                 chaptersSection
+                atlasWatchingSection
 
                 Spacer().frame(height: 90)
             }
@@ -288,55 +295,48 @@ struct TodayView: View {
         try? context.save()
     }
 
-    // ─── v0.2 — Handled while you slept ───────────────────────────
-    private var handledOvernightStrip: some View {
-        let calendar = Calendar.current
-        let startOfDay = calendar.startOfDay(for: Date())
-        let signalCounts = allSignals
-            .filter { $0.arrivedAt >= startOfDay }
-            .reduce(into: [SignalSource: Int]()) { $0[$1.source, default: 0] += 1 }
-        let filedToday = allProposals
-            .filter { $0.status == .approved && ($0.decidedAt ?? .distantPast) >= startOfDay }
-            .reduce(into: [ProposalType: Int]()) { $0[$1.type, default: 0] += 1 }
-
-        var parts: [String] = []
-        if let n = signalCounts[.gmail], n > 5 { parts.append("filed \(n) newsletters") }
-        if let n = filedToday[.todo]            { parts.append("drafted \(n) todos") }
-        if let n = filedToday[.decision]        { parts.append("noted \(n) decision") }
-        if let n = filedToday[.journalEntry]    { parts.append("saved \(n) journal \(n == 1 ? "entry" : "entries")") }
-        let totalSignals = signalCounts.values.reduce(0, +)
-        let sentence: String
-        if parts.isEmpty {
-            sentence = totalSignals == 0
-                ? "Nothing came in overnight."
-                : "Handled \(totalSignals) small signals overnight; nothing flagged for review."
-        } else {
-            sentence = parts.joined(separator: " · ")
-        }
-
-        return VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Text("HANDLED WHILE YOU SLEPT")
-                    .font(Theme.Font.mono(9))
-                    .tracking(1.8)
-                    .foregroundStyle(Theme.Palette.inkFaint)
-                Text("· overnight")
-                    .font(Theme.Font.mono(9))
-                    .foregroundStyle(Theme.Palette.inkFainter)
+    // ─── v0.2 — "I sat with last night" entry to Morning page ─────
+    // Per atlas-screens.jsx canonical TodayScreen (lines 45–73): mono
+    // eyebrow + italic-serif one-liner, full-row tappable, routes to the
+    // Morning tab. The "Drafted in your voice" overnight window stamp lives
+    // in the eyebrow as a dim-mono divider next to the section label.
+    private var iSatWithLastNightStrip: some View {
+        let range = SEEDED_MORNING_PAGE.range
+        return Button(action: onOpenMorning) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Text(TimeBand.current.todayEyebrow)
+                        .font(Theme.Font.mono(9))
+                        .tracking(2.0)
+                        .foregroundStyle(Theme.Palette.inkFaint)
+                    Text("· \(range)")
+                        .font(Theme.Font.mono(9))
+                        .tracking(1.2)
+                        .foregroundStyle(Theme.Palette.inkFainter)
+                }
+                HStack(alignment: .firstTextBaseline, spacing: 0) {
+                    Text("Drafted your \(TimeBand.current.filedNoun) page in your voice. ")
+                        .font(Theme.Font.serifItalic(16))
+                        .foregroundStyle(Theme.Palette.ink)
+                    Text("Read it →")
+                        .font(Theme.Font.serifItalic(16))
+                        .foregroundStyle(Theme.Palette.tealDeep)
+                }
+                .lineSpacing(3)
+                .multilineTextAlignment(.leading)
             }
-            Text(sentence + ".")
-                .font(Theme.Font.mono(11.5))
-                .foregroundStyle(Theme.Palette.inkSecondary)
-                .lineSpacing(2)
+            .padding(.vertical, 14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .overlay(alignment: .top) {
+                Rectangle().fill(Theme.Palette.hairline).frame(height: 1)
+            }
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(Theme.Palette.hairline).frame(height: 1)
+            }
         }
-        .padding(.vertical, 14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .overlay(alignment: .top) {
-            Rectangle().fill(Theme.Palette.hairline).frame(height: 1)
-        }
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(Theme.Palette.hairline).frame(height: 1)
-        }
+        .buttonStyle(.plain)
+        .pressable()
         .padding(.horizontal, 22)
         .padding(.top, 22)
     }
@@ -357,7 +357,7 @@ struct TodayView: View {
             .padding(.bottom, 12)
 
             if briefs.isEmpty {
-                Text("Nothing surfaced yet. Atlas will draft briefs as situations form.")
+                Text("Nothing surfaced yet. Ayumi will draft briefs as situations form.")
                     .font(Theme.Font.serifItalic(15))
                     .foregroundStyle(Theme.Palette.inkFaint)
                     .padding(.vertical, 16)
@@ -377,22 +377,23 @@ struct TodayView: View {
     }
 
     // ─── v0.2 — Atlas is watching ────────────────────────────────
+    // Small mono eyebrow + radar icon (NOT a serif H2). Matches
+    // atlas-screens.jsx:158-167: 9px mono uppercase, .20em tracking,
+    // var(--teal-deep), inline WatcherIcon (radar sweep).
     private var atlasWatchingSection: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("Atlas is watching")
-                    .font(Theme.Font.serif(22))
-                    .foregroundStyle(Theme.Palette.ink)
+            HStack(alignment: .center, spacing: 6) {
+                WatcherIcon(size: 11)
+                Text("AYUMI IS WATCHING")
+                    .font(Theme.Font.mono(9))
+                    .tracking(2.0)
+                    .foregroundStyle(Theme.Palette.tealDeep)
                 Spacer()
-                Text("\(watchers.count) ACTIVE")
-                    .font(Theme.Font.mono(9.5))
-                    .tracking(1.6)
-                    .foregroundStyle(Theme.Palette.inkFaint)
             }
-            .padding(.bottom, 4)
+            .padding(.bottom, 8)
 
             if watchers.isEmpty {
-                Text("Nothing on watch. Atlas adds watchers when it spots something worth checking back on.")
+                Text("Nothing on watch yet. Ayumi adds watchers when it spots something worth checking back on.")
                     .font(Theme.Font.serifItalic(14))
                     .foregroundStyle(Theme.Palette.inkFaint)
                     .padding(.vertical, 10)

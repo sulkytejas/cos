@@ -285,7 +285,7 @@ struct QuoteCard: View {
             BriefSectionLabel("Quoted")
             ZStack(alignment: .topLeading) {
                 Text("\u{201C}")
-                    .font(.system(size: 52, design: .serif))
+                    .font(Theme.Font.serif(52))
                     .italic()
                     .foregroundStyle(Theme.Palette.teal.opacity(0.45))
                     .offset(x: -2, y: -8)
@@ -365,7 +365,7 @@ struct WatcherCardSection: View {
             }
             .frame(width: 28, height: 28)
             VStack(alignment: .leading, spacing: 4) {
-                Text("ATLAS IS WATCHING")
+                Text("AYUMI IS WATCHING")
                     .font(Theme.Font.mono(9))
                     .tracking(2.0)
                     .foregroundStyle(Theme.Palette.tealDeep)
