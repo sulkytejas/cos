@@ -74,6 +74,7 @@ struct PageShell<Content: View>: View {
 struct AyumiRoot: View {
     @State private var router = NavRouter()
     @State private var halo = HaloController(rimInset: 11)
+    @Environment(\.modelContext) private var context
 
     var body: some View {
         PageShell(router: router, halo: halo) {
@@ -90,6 +91,12 @@ struct AyumiRoot: View {
                let p = AyumiPage.allCases.first(where: { $0.title.lowercased() == args[i + 1] }) {
                 router.current = p
             }
+            #if DEBUG
+            if args.contains("--seed-calendar") {
+                EventKitCalendarSource.seedDevEvent()
+                ConnectorRunner.pollOnce(in: context)   // force a poll now
+            }
+            #endif
         }
     }
 

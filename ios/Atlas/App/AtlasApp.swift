@@ -28,6 +28,8 @@ struct AtlasApp: App {
         let captured = self.container
         Task { await AtlasAgent.shared.attach(container: captured) }
         BackgroundRefresh.register()
+        // Ask for calendar access so the connector can read the real schedule.
+        Task { await EventKitCalendarSource.requestAccess() }
     }
 
     /// One-time print of every bundled font family + PostScript names so we

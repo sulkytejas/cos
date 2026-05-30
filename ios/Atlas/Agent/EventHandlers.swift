@@ -425,7 +425,10 @@ enum CalendarConnector {
         )))?.compactMap { $0.externalId } ?? []
         let seen = Set(existing)
         let now = Date()
-        for fix in fixtures {
+        // Real calendar when the user has granted access; the bundled fixtures
+        // otherwise (so the demo + design review still work).
+        let source = EventKitCalendarSource.isAuthorized ? EventKitCalendarSource.events() : fixtures
+        for fix in source {
             if seen.contains(fix.externalId) { continue }
             let arrival = fix.startOffsetSeconds.map { now.addingTimeInterval($0) } ?? now
             let signal = Signal(
