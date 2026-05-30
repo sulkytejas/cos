@@ -11,9 +11,11 @@ struct SearchScreen: View {
     @Query private var decisions: [Decision]
     @Query private var todos: [Todo]
     @Query private var chapters: [Chapter]
-    @State private var query = "retention"
+    @State private var query = ""
     @State private var scope: RType? = nil
-    @State private var settleWork: DispatchWorkItem?
+    @State private var ragAnswer: String? = nil          // real grounded answer
+    @State private var ragCache: [String: String] = [:]  // by "scope|query"
+    @State private var settleTask: Task<Void, Never>?
     @FocusState private var focused: Bool
 
     enum RType: String, CaseIterable { case brief, note, todo, person, chapter }
@@ -26,7 +28,12 @@ struct SearchScreen: View {
             scopeRow.padding(.horizontal, 24).padding(.bottom, 6)
             results
         }
-        .onAppear { settle() }
+        .onAppear {
+            // DEV: seed a query via `simctl launch … --query Ireland` for screenshots.
+            let args = ProcessInfo.processInfo.arguments
+            if let i = args.firstIndex(of: "--query"), i + 1 < args.count { query = args[i + 1] }
+            runSettle()
+        }
         .onChange(of: query) { _, _ in onChange() }
         .onChange(of: scope) { _, _ in onChange() }
     }
@@ -88,11 +95,11 @@ struct SearchScreen: View {
     private var results: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                if let a = currentAnswer {
+                if let answerText = displayedAnswer {
                     JadeCard(radius: 12) {
                         VStack(alignment: .leading, spacing: 7) {
                             Text("AYUMI").font(Theme.Font.mono(9)).tracking(1.6).foregroundStyle(Theme.Palette.jadeCardInk.opacity(0.7))
-                            Text(a.text).font(Theme.Font.serifItalic(16)).foregroundStyle(Theme.Palette.jadeCardInk)
+                            Text(answerText).font(Theme.Font.serifItalic(16)).foregroundStyle(Theme.Palette.jadeCardInk)
                                 .lineSpacing(6).fixedSize(horizontal: false, vertical: true)
                         }
                     }
@@ -101,7 +108,7 @@ struct SearchScreen: View {
                 let groups = grouped
                 if query.isEmpty {
                     emptyState("Ask anything.", "Briefs, notes, people, chapters, todos — all in one place.")
-                } else if groups.isEmpty && currentAnswer == nil {
+                } else if groups.isEmpty && displayedAnswer == nil {
                     emptyState("Nothing yet.", "Try \"retention\", \"Karan\", or \"Ireland\".")
                 } else {
                     ForEach(groups, id: \.0) { type, items in
@@ -243,14 +250,51 @@ struct SearchScreen: View {
         }
     }
 
-    private func onChange() { halo.setState(.thinking); settle() }
-    private func settle() {
-        settleWork?.cancel()
-        let hasAnswer = currentAnswer != nil
-        let empty = query.isEmpty
-        let work = DispatchWorkItem { halo.setState(empty ? .idle : (hasAnswer ? .delivered : .idle)) }
-        settleWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.65, execute: work)
+    /// The shown answer: a real grounded answer when we have one, else the
+    /// canned keyword answer (offline / pre-RAG fallback).
+    private var displayedAnswer: String? { ragAnswer ?? currentAnswer?.text }
+
+    private func onChange() {
+        ragAnswer = nil
+        if !query.isEmpty { halo.setState(.thinking) }
+        runSettle()
+    }
+
+    /// Debounced: think while filtering, then a real RAG answer grounded in the
+    /// top hits, and deliver. Gated + cached so it can't spend on every keystroke.
+    private func runSettle() {
+        settleTask?.cancel()
+        let q = query.trimmingCharacters(in: .whitespaces)
+        let scopeNow = scope
+        let hits = filtered
+        settleTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 380_000_000)   // debounce
+            if Task.isCancelled { return }
+            if q.isEmpty { ragAnswer = nil; halo.setState(.idle); return }
+
+            let key = "\(scopeNow?.rawValue ?? "all")|\(q.lowercased())"
+            if let cached = ragCache[key] { ragAnswer = cached; halo.setState(.delivered); return }
+
+            // Only spend a call when it can actually help.
+            guard q.count >= 3, !hits.isEmpty, AtlasLLM.isConfigured else {
+                halo.setState(currentAnswer != nil ? .delivered : .idle)
+                return
+            }
+            let context = hits.prefix(8)
+                .map { "- [\($0.type.rawValue)] \($0.title)\($0.meta.isEmpty ? "" : " — \($0.meta)")" }
+                .joined(separator: "\n")
+            let system = "You are Ayumi, a calm chief-of-staff. Answer the user's query in 1–2 short sentences, first person, grounded ONLY in the provided context. If the context doesn't contain the answer, say what you do see instead. Never invent facts."
+            let user = "Query: \(q)\n\nContext from the user's own data:\n\(context)"
+            do {
+                let text = try await AtlasLLM.complete(system: system, user: user, maxTokens: 200)
+                if Task.isCancelled { return }
+                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { ragCache[key] = trimmed; ragAnswer = trimmed }
+                halo.setState(.delivered)
+            } catch {
+                halo.setState(currentAnswer != nil ? .delivered : .idle)
+            }
+        }
     }
 
     // ─── Corpus + answers ─────────────────────────────────────────

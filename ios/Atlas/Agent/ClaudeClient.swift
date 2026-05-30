@@ -109,6 +109,24 @@ struct ClaudeClient: LLMClient {
         throw LLMError.maxIterationsReached
     }
 
+    /// One-shot, tool-less completion (Search answers, summaries). Single turn,
+    /// returns the model's prose; the system prompt is cache-controlled too.
+    func complete(system: String, user: String, maxTokens: Int = 512) async throws -> String {
+        guard let key = Self.apiKey() else { throw LLMError.missingKey(provider: "Anthropic") }
+        let configured = UserDefaults.standard.string(forKey: "AnthropicModel")?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let model = (configured?.isEmpty == false) ? configured! : Self.defaultModel
+        let body: [String: Any] = [
+            "model": model,
+            "max_tokens": maxTokens,
+            "system": [["type": "text", "text": system, "cache_control": ["type": "ephemeral"]]],
+            "messages": [["role": "user", "content": [["type": "text", "text": user]]]],
+            "temperature": 0.3,
+        ]
+        let (_, finalText, _) = try await Self.sendOnce(body: body, key: key, model: model)
+        return finalText ?? ""
+    }
+
     // MARK: - HTTP
 
     private struct ToolCall { let id: String; let name: String; let input: [String: Any] }
@@ -157,6 +175,16 @@ struct ClaudeClient: LLMClient {
         guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let content = root["content"] as? [[String: Any]] else {
             throw LLMError.decoding("missing content array")
+        }
+
+        // Record token usage against the per-day budget (a runaway guard).
+        if let usage = root["usage"] as? [String: Any] {
+            let inTok = (usage["input_tokens"] as? Int ?? 0)
+                + (usage["cache_creation_input_tokens"] as? Int ?? 0)
+                + (usage["cache_read_input_tokens"] as? Int ?? 0)
+            let outTok = (usage["output_tokens"] as? Int ?? 0)
+            LLMBudget.record(inTok + outTok)
+            log.info("usage in=\(inTok) out=\(outTok) · today \(LLMBudget.spentToday)/\(LLMBudget.dailyCap)")
         }
 
         var text: String? = nil

@@ -55,6 +55,17 @@ protocol LLMClient {
     /// Run one agent task. `userText` is the opening user turn; wiring the system
     /// prompt (`AtlasSystemPrompt.text`) and tools is the conformer's job.
     func run(userText: String, tools: ToolRegistry) async throws -> RunResult
+
+    /// One-shot completion (no tools, single turn) — for grounded answers and
+    /// short summaries (e.g. the Search answer card). Returns the model's prose.
+    func complete(system: String, user: String, maxTokens: Int) async throws -> String
+}
+
+extension LLMClient {
+    /// Default for engines that don't implement a one-shot path.
+    func complete(system: String, user: String, maxTokens: Int) async throws -> String {
+        throw LLMError.decoding("one-shot complete() not supported by this engine")
+    }
 }
 
 /// The single place a provider is chosen. Everything else calls `AtlasLLM.run`
@@ -73,14 +84,24 @@ enum AtlasLLM {
     static var isBreakerTripped: Bool { breakerReason != nil }
     static func resetBreaker() { breakerReason = nil }
 
-    /// True when the active engine is ready to run (key set AND breaker closed).
-    static var isConfigured: Bool { client.isConfigured && !isBreakerTripped }
+    /// True when the active engine is ready to run: key set, breaker closed, AND
+    /// today's token budget not yet spent.
+    static var isConfigured: Bool { client.isConfigured && !isBreakerTripped && !LLMBudget.isExhausted }
 
     static func run(userText: String, tools: ToolRegistry) async throws -> RunResult {
         do {
             return try await client.run(userText: userText, tools: tools)
         } catch let LLMError.http(status, body) where isAccountError(status, body) {
             breakerReason = "HTTP \(status)"   // e.g. 400 no-credit, 401/403 auth
+            throw LLMError.http(status, body)
+        }
+    }
+
+    static func complete(system: String, user: String, maxTokens: Int = 512) async throws -> String {
+        do {
+            return try await client.complete(system: system, user: user, maxTokens: maxTokens)
+        } catch let LLMError.http(status, body) where isAccountError(status, body) {
+            breakerReason = "HTTP \(status)"
             throw LLMError.http(status, body)
         }
     }
@@ -96,6 +117,38 @@ enum AtlasLLM {
         }
         return false
     }
+}
+
+/// A per-day token budget — a safety cap so the background agent loop can't run
+/// away. Engines report tokens via `record(_:)`; once the day's cap is reached,
+/// `AtlasLLM.isConfigured` reads false and handlers degrade to the dormant
+/// fallback until local midnight. Cap is read from
+/// `UserDefaults["AtlasDailyTokenCap"]` (default 300k) so it's tunable without a
+/// rebuild — `defaults write com.atlas.app AtlasDailyTokenCap 500000`.
+enum LLMBudget {
+    static var dailyCap: Int {
+        let v = UserDefaults.standard.integer(forKey: "AtlasDailyTokenCap")
+        return v > 0 ? v : 300_000
+    }
+
+    private static var dayStamp = ""
+    private(set) static var tokensToday = 0
+
+    private static func rollover() {
+        let s = stamp()
+        if s != dayStamp { dayStamp = s; tokensToday = 0 }
+    }
+    private static func stamp() -> String {
+        let c = Calendar.current.dateComponents([.year, .month, .day], from: Date())
+        return "\(c.year ?? 0)-\(c.month ?? 0)-\(c.day ?? 0)"
+    }
+
+    /// True once the day's cap is reached.
+    static var isExhausted: Bool { rollover(); return tokensToday >= dailyCap }
+    /// Tokens spent so far today (for a future Settings readout).
+    static var spentToday: Int { rollover(); return tokensToday }
+    /// Record tokens reported by an engine (input + cache + output).
+    static func record(_ tokens: Int) { rollover(); tokensToday += max(0, tokens) }
 }
 
 // MARK: - Tools (provider-neutral)
