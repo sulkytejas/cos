@@ -7,6 +7,8 @@ import SwiftData
 struct TodayScreen: View {
     @Environment(HaloController.self) private var halo
     @Environment(\.modelContext) private var context
+    @Query(filter: #Predicate<Brief> { $0.statusRaw == "surfaced" },
+           sort: \.surfaceAt, order: .reverse) private var briefs: [Brief]
     @State private var draft = ""
     @State private var composeOpen = false
     @State private var userTurns: [String] = []
@@ -21,6 +23,7 @@ struct TodayScreen: View {
                 VStack(alignment: .leading, spacing: 0) {
                     DayDivider(label: "while you slept", roman: "02:14 → 06:38")
 
+                    if briefs.isEmpty {
                     AyumiTurn(when: "06:38",
                               prose: ayumiProse([
                                 .init("I sat with last night while you slept. "),
@@ -53,6 +56,17 @@ struct TodayScreen: View {
                               source: "3 sources · drive, gmail, calendar") {
                         BriefCapsule(glyph: "S", title: "Swap the churn slide", when: "5 min",
                                      onOpen: { emitRing(); halo.setState(.delivered) })
+                    }
+                    } else {
+                        ForEach(Array(briefs.prefix(4))) { b in
+                            AyumiTurn(when: b.when ?? "today",
+                                      prose: ayumiProse([.init(b.preview ?? b.relevance ?? b.situationDescription)], size: 17),
+                                      source: b.drafted) {
+                                BriefCapsule(glyph: String(b.title.prefix(1)).uppercased(),
+                                             title: b.title, when: b.when ?? "",
+                                             onOpen: { emitRing(); halo.setState(.delivered) })
+                            }
+                        }
                     }
 
                     ForEach(Array(userTurns.enumerated()), id: \.offset) { _, t in

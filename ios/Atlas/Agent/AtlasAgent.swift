@@ -209,7 +209,11 @@ actor AtlasAgent {
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = TimeZone(identifier: "Asia/Kolkata") ?? .current
         let comps = cal.dateComponents([.year, .month, .day, .hour, .weekday], from: now)
-        guard let hour = comps.hour, hour == 6 else { return }
+        // Fire on the first foreground tick after ~5am local each day. The old
+        // `hour == 6` gate almost never matched a foregrounded app, so the
+        // "while you slept" digest never generated. The per-day stamp below
+        // still guarantees it runs at most once per day.
+        guard let hour = comps.hour, hour >= 5 else { return }
 
         let stamp = "\(comps.year ?? 0)-\(comps.month ?? 0)-\(comps.day ?? 0)"
         // Fast path — if we enqueued today's scan during this app session,
