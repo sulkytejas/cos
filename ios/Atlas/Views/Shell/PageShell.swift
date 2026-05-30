@@ -11,6 +11,7 @@ struct PageShell<Content: View>: View {
     @ViewBuilder var content: () -> Content
 
     @State private var showIndex = false
+    @State private var showSettings = false
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -48,7 +49,11 @@ struct PageShell<Content: View>: View {
                         router.go(page)
                         withAnimation(Theme.Motion.overshoot()) { showIndex = false }
                     },
-                    onClose: { withAnimation(Theme.Motion.overshoot()) { showIndex = false } }
+                    onClose: { withAnimation(Theme.Motion.overshoot()) { showIndex = false } },
+                    onSettings: {
+                        withAnimation(Theme.Motion.overshoot()) { showIndex = false }
+                        showSettings = true
+                    }
                 )
                 .zIndex(20)
             }
@@ -66,6 +71,9 @@ struct PageShell<Content: View>: View {
                     }
                 }
         )
+        .sheet(isPresented: $showSettings) {
+            AyumiSettings().presentationDetents([.medium, .large])
+        }
     }
 }
 

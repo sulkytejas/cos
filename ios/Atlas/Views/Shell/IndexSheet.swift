@@ -8,6 +8,7 @@ struct IndexSheet: View {
     let current: AyumiPage
     let onSelect: (AyumiPage) -> Void
     let onClose: () -> Void
+    var onSettings: (() -> Void)? = nil
 
     private var destinations: [AyumiPage] { AyumiPage.allCases.filter { $0 != current } }
     private var sheetShape: some Shape {
@@ -57,6 +58,19 @@ struct IndexSheet: View {
                 if idx < destinations.count - 1 {
                     Rectangle().fill(Theme.Palette.ruleSoft).frame(height: 1)
                 }
+            }
+
+            if let onSettings {
+                Rectangle().fill(Theme.Palette.ruleSoft).frame(height: 1).padding(.top, 4)
+                Button { onSettings() } label: {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text("Settings").font(Theme.Font.serifItalic(20)).foregroundStyle(Theme.Palette.ink3)
+                        Spacer()
+                        Text("KEY · BUDGET").font(Theme.Font.mono(9)).tracking(1.0).foregroundStyle(Theme.Palette.ink4)
+                    }
+                    .padding(.vertical, 12).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
             }
         }
         .padding(.top, 56)

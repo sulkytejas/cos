@@ -7,6 +7,7 @@ import SwiftData
 struct TodayScreen: View {
     @Environment(HaloController.self) private var halo
     @Environment(\.modelContext) private var context
+    @Environment(NavRouter.self) private var router
     @Query(filter: #Predicate<Brief> { $0.statusRaw == "surfaced" },
            sort: \.surfaceAt, order: .reverse) private var briefs: [Brief]
     @State private var draft = ""
@@ -64,7 +65,8 @@ struct TodayScreen: View {
                                       source: b.drafted) {
                                 BriefCapsule(glyph: String(b.title.prefix(1)).uppercased(),
                                              title: b.title, when: b.when ?? "",
-                                             onOpen: { emitRing(); halo.setState(.delivered) })
+                                             onOpen: { emitRing(); halo.setState(.delivered) },
+                                             onOpenFull: { withAnimation(Theme.Motion.overshoot()) { router.go(.brief) } })
                             }
                         }
                     }
@@ -299,6 +301,7 @@ private struct BriefCapsule: View {
     let title: String
     let when: String
     let onOpen: () -> Void
+    var onOpenFull: () -> Void = {}
     @State private var open = false
 
     var body: some View {
@@ -352,7 +355,7 @@ private struct BriefCapsule: View {
             confRow(0.31, "A follow-on round — early, but he may float it.")
             label("Open with")
             row("\"The churn slide moved — V. sent fresher numbers this morning.\"")
-            Button {} label: {
+            Button { onOpenFull() } label: {
                 Text("OPEN FULL BRIEF →")
                     .font(Theme.Font.mono(10)).tracking(1.2)
                     .foregroundStyle(Theme.Palette.tealDeep)
