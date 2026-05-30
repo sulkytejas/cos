@@ -8,9 +8,11 @@ struct TodayView: View {
            sort: \Brief.surfaceAt) private var briefs: [Brief]
     @Query(filter: #Predicate<Watcher> { $0.statusRaw == "active" },
            sort: \Watcher.createdAt, order: .reverse) private var watchers: [Watcher]
-    @Query private var allProposals: [Proposal]
-    @Query private var allSignals: [Signal]
     @State private var briefDone = false
+    /// True while the TempoNow hero is within the viewport. Gates its animation
+    /// loops so they stop once scrolled past (Today is a non-lazy ScrollView, so
+    /// offscreen subviews keep ticking otherwise). See PERFORMANCE_REVIEW.md H1.
+    @State private var heroVisible = true
     @Binding var pullProgress: CGFloat
     let onPullCapture: () -> Void
     /// Closure handed down from RootView — switches the active tab to .review
@@ -42,7 +44,8 @@ struct TodayView: View {
 
                 Spacer().frame(height: 26)
                 TempoNow(events: Self.calendarEvents,
-                         todoHours: todoHoursToday())
+                         todoHours: todoHoursToday(),
+                         isVisible: heroVisible)
 
                 morningBrief
                 briefsForTodaySection
@@ -65,6 +68,12 @@ struct TodayView: View {
             // Fire on release-style: when user lets go and progress was ≥1, open capture.
             // Use a simple state machine — if progress drops to ~0 quickly and we were armed, fire.
             handlePullChange(progress: progress)
+            // y is the content-top offset (0 at rest, negative when scrolled up).
+            // The hero sits ~270–590pt down the page; once it's scrolled fully
+            // off the top, stop its animation loops. Guarded so we only write
+            // state when the boolean actually flips, not every scroll frame.
+            let nowVisible = y > -560
+            if nowVisible != heroVisible { heroVisible = nowVisible }
         }
     }
 
@@ -89,7 +98,8 @@ struct TodayView: View {
                     .foregroundStyle(Theme.Palette.ink)
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
-                    .breathing()
+                    // (v0.3 perf: dropped .breathing() — ±0.6% scale is below
+                    // the visible threshold and cost a 30fps loop on the header.)
             }
             Spacer()
             CompassDial(size: 56)
@@ -367,7 +377,7 @@ struct TodayView: View {
                         NavigationLink(value: b) {
                             BriefTeaserCard(brief: b)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.pressScale)
                     }
                 }
             }
@@ -452,12 +462,8 @@ struct BriefTeaserCard: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.Palette.card)
-        .overlay(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .strokeBorder(Theme.Palette.hairline, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        // Row inside a ForEach → single-shadow elevation, not Material A. (H4)
+        .cardElevation()
     }
 }
 
@@ -560,6 +566,7 @@ struct ChapterCardCompact: View {
         }
         .padding(.horizontal, 14).padding(.vertical, 13)
         .frame(maxWidth: .infinity)
-        .card()
+        // Row inside a ForEach → single-shadow elevation, not Material A. (H4)
+        .cardElevation()
     }
 }

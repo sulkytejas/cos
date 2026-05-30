@@ -51,7 +51,7 @@ enum ChapterCreatedHandler {
             log.info("chapter \(targetID.uuidString, privacy: .public) not found")
             return
         }
-        guard UserDefaults.standard.string(forKey: "GeminiAPIKey")?.isEmpty == false else {
+        guard AtlasLLM.isConfigured else {
             log.info("no API key — skipping agent run for new chapter")
             return
         }
@@ -75,7 +75,7 @@ enum ChapterCreatedHandler {
         concrete and small — these are the first taps.
         """
         let registry = AgentTools.registry(for: ctx, scopeChapter: chapter)
-        _ = try await GeminiAgent.run(userText: userText, tools: registry)
+        _ = try await AtlasLLM.run(userText: userText, tools: registry)
         log.info("chapter_created handled for \(chapter.title, privacy: .public)")
     }
 }
@@ -96,7 +96,7 @@ enum CaptureHandler {
 
         // If there's no API key, fall back to writing a manual proposal so the
         // capture isn't lost — same behaviour as the prior CaptureSheet.save().
-        guard UserDefaults.standard.string(forKey: "GeminiAPIKey")?.isEmpty == false else {
+        guard AtlasLLM.isConfigured else {
             log.info("no API key — filing capture as a pending todo proposal")
             try fallbackPersistAsProposal(payload: payload, chapter: scopeChapter, ctx: ctx)
             return
@@ -121,7 +121,7 @@ enum CaptureHandler {
 
         let registry = AgentTools.registry(for: ctx, scopeChapter: scopeChapter)
         do {
-            let result = try await GeminiAgent.run(userText: userText, tools: registry)
+            let result = try await AtlasLLM.run(userText: userText, tools: registry)
             log.info("capture handled — \(result.trace.count) trace steps, final text \(result.finalText.prefix(120), privacy: .public)")
         } catch {
             // Don't lose the capture — write a fallback proposal and rethrow so
@@ -161,7 +161,7 @@ enum CaptureHandler {
             summary: "Captured: \(trimmed.prefix(80))",
             sourceLabel: "Capture",
             sourceMeta: AtlasFormat.shortDay.string(from: Date()),
-            reasoning: "Filed without LLM — add a Gemini key in Settings to let Atlas reason about captures."
+            reasoning: "Filed without the agent — add a Claude (Anthropic) API key in Settings to let Atlas reason about captures."
         )
         ctx.insert(p)
         try? ctx.save()
@@ -195,7 +195,7 @@ enum WatcherDueHandler {
             log.info("watcher \(targetID.uuidString, privacy: .public) not found")
             return
         }
-        guard UserDefaults.standard.string(forKey: "GeminiAPIKey")?.isEmpty == false else {
+        guard AtlasLLM.isConfigured else {
             log.info("no API key — skipping watcher \(watcher.id.uuidString, privacy: .public)")
             return
         }
@@ -213,7 +213,7 @@ enum WatcherDueHandler {
         has changed, return a one-line summary so we can log it and move on.
         """
         let registry = AgentTools.registry(for: ctx, scopeChapter: watcher.chapter)
-        let result = try await GeminiAgent.run(userText: userText, tools: registry)
+        let result = try await AtlasLLM.run(userText: userText, tools: registry)
         // Only mark lastChecked on a successful run, so a transient failure
         // doesn't silently lose the next check window.
         watcher.lastChecked = Date()
@@ -236,7 +236,7 @@ enum TimeTriggerHandler {
         let payload = try? JSONDecoder().decode(DailyScanPayload.self, from: event.payloadJSON)
         let forwardDrift = payload?.forwardDrift ?? false
 
-        guard UserDefaults.standard.string(forKey: "GeminiAPIKey")?.isEmpty == false else {
+        guard AtlasLLM.isConfigured else {
             log.info("no API key — skipping daily scan")
             return
         }
@@ -262,7 +262,7 @@ enum TimeTriggerHandler {
             """
         }
         let registry = AgentTools.registry(for: ctx)
-        let result = try await GeminiAgent.run(userText: userText, tools: registry)
+        let result = try await AtlasLLM.run(userText: userText, tools: registry)
         log.info("time-trigger handled, \(result.trace.count) steps")
     }
 }
@@ -287,7 +287,7 @@ enum SignalReceivedHandler {
             log.info("signal \(targetID.uuidString, privacy: .public) not found — already deleted?")
             return
         }
-        guard UserDefaults.standard.string(forKey: "GeminiAPIKey")?.isEmpty == false else {
+        guard AtlasLLM.isConfigured else {
             signal.processed = true
             try ctx.save()
             return
@@ -304,7 +304,7 @@ enum SignalReceivedHandler {
         so. Use person_lookup and chapter_query to see if it fits a chapter.
         """
         let registry = AgentTools.registry(for: ctx)
-        _ = try await GeminiAgent.run(userText: userText, tools: registry)
+        _ = try await AtlasLLM.run(userText: userText, tools: registry)
         signal.processed = true
         try ctx.save()
     }
@@ -342,7 +342,7 @@ enum BriefActedOnHandler {
             already in the brief.
             """
             let registry = AgentTools.registry(for: ctx, scopeChapter: brief.chapter)
-            _ = try await GeminiAgent.run(userText: userText, tools: registry)
+            _ = try await AtlasLLM.run(userText: userText, tools: registry)
         default:
             break
         }

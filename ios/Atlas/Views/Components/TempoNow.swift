@@ -6,6 +6,12 @@ import SwiftUI
 struct TempoNow: View {
     let events: [HourEvent]
     let todoHours: [Double]
+    /// Off-screen gate, threaded down to every decorative animation loop so
+    /// the hero's gradients/arc/shimmer/pulse stop the moment it scrolls out of
+    /// the viewport (on top of AmbientTimeline's scene/reduce-motion/low-power
+    /// gating). Today is a non-lazy ScrollView, so without this the loops keep
+    /// firing while invisible. See PERFORMANCE_REVIEW.md H1.
+    var isVisible: Bool = true
 
     private let startHour: Double = 6
     private let endHour: Double = 24
@@ -67,12 +73,13 @@ struct TempoNow: View {
                         .multilineTextAlignment(.center)
                         .lineLimit(2)
                         .padding(.horizontal, 8)
-                        .breathing()
+                        // (v0.3 perf: dropped .breathing() — a ±0.6% scale is
+                        // below the visible threshold and cost a 30fps loop.)
                         .overlay(
                             // Shimmer sweep, masked to the glyph shapes
                             Group {
                                 if event != nil {
-                                    ShimmerOverlay()
+                                    ShimmerOverlay(active: isVisible)
                                         .mask(
                                             Text(event?.title ?? "")
                                                 .font(Theme.Font.serifItalic(32))
@@ -119,16 +126,17 @@ struct TempoNow: View {
         .background {
             ZStack {
                 Theme.Palette.card                                          // white surface
-                BreathingAura().frame(width: 380, height: 380)              // teal orb
-                RotatingArc().frame(width: 240, height: 240)                // hairline arc
+                BreathingAura(active: isVisible).frame(width: 380, height: 380)   // teal orb
+                RotatingArc(active: isVisible).frame(width: 240, height: 240)     // hairline arc
             }
             .allowsHitTesting(false)
         }
-        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .strokeBorder(Theme.Palette.hairline, lineWidth: 1)
-        )
+        // v0.3: no container outline — the layered surface + lift give it
+        // presence. Perf: a single shadow (not the 3-shadow + plusLighter
+        // Material A stack) because this surface re-composites every animation
+        // frame; one cast is ~all the look at a third of the cost. See H4.
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .cardElevation(radius: 8, fill: false)
     }
 
     // ─── Day rail ─────────────────────────────────────────────────
@@ -219,7 +227,7 @@ struct TempoNow: View {
                     Circle()
                         .fill(Theme.Palette.teal)
                         .frame(width: 8, height: 8)
-                        .overlay(PulseRing())
+                        .overlay(PulseRing(active: isVisible))
                         .position(x: cursorX, y: 9)
                         .allowsHitTesting(false)
                         .animation(isScrubbing ? .none : .linear(duration: 1.0), value: cursorH)
@@ -333,9 +341,12 @@ struct TempoNow: View {
 ///    feels alive even when the outer halo is at its dim phase.
 /// Both rotate slowly so the soft anisotropies in the gradient stops drift.
 struct BreathingAura: View {
+    var active: Bool = true
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1/60, paused: false)) { ctx in
-            let t = ctx.date.timeIntervalSinceReferenceDate
+        // 30fps, not 60 — a 3.4s breathe is imperceptible above 30. Gated so it
+        // freezes off-screen / in low-power / reduce-motion.
+        AmbientTimeline(fps: 30, active: active) { now in
+            let t = now.timeIntervalSinceReferenceDate
 
             // Outer halo — slow, wide, dramatic
             let outerPhase = sin(t * (2 * .pi / 3.4))
@@ -387,9 +398,10 @@ struct BreathingAura: View {
 
 // ─── Slow rotating hairline arc ─────────────────────────────────────
 struct RotatingArc: View {
+    var active: Bool = true
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1/30, paused: false)) { ctx in
-            let t = ctx.date.timeIntervalSinceReferenceDate
+        AmbientTimeline(fps: 24, active: active) { now in
+            let t = now.timeIntervalSinceReferenceDate
             let rotation = -(t.truncatingRemainder(dividingBy: 28)) / 28 * 360
 
             ZStack {
@@ -416,25 +428,38 @@ struct RotatingArc: View {
 
 // ─── Shimmer overlay ────────────────────────────────────────────────
 struct ShimmerOverlay: View {
-    var body: some View {
-        TimelineView(.animation(minimumInterval: 1/30, paused: false)) { ctx in
-            let cycle: Double = 6.5
-            let t = ctx.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: cycle) / cycle
-            let opacity = shimmerOpacity(at: t)
-            // Sweep moves left-to-right across the mask
-            let pos = -0.5 + t * 2.0      // -0.5 → 1.5 over the cycle
+    var active: Bool = true
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-            LinearGradient(
-                gradient: Gradient(stops: [
-                    .init(color: Color.clear,                            location: 0.00),
-                    .init(color: Theme.Palette.teal.opacity(0.65),       location: 0.50),
-                    .init(color: Color.clear,                            location: 1.00),
-                ]),
-                startPoint: UnitPoint(x: pos - 0.18, y: 0.3),
-                endPoint:   UnitPoint(x: pos + 0.18, y: 0.7)
-            )
-            .blendMode(.plusLighter)
-            .opacity(opacity)
+    var body: some View {
+        if reduceMotion {
+            // No sweep for reduce-motion users (and nothing to composite).
+            Color.clear
+        } else {
+            AmbientTimeline(fps: 30, active: active) { now in
+                let cycle: Double = 6.5
+                let t = now.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: cycle) / cycle
+                let opacity = shimmerOpacity(at: t)
+                if opacity <= 0 {
+                    // ~40% of the cycle the sweep is off — skip the masked
+                    // plusLighter offscreen pass entirely.
+                    Color.clear
+                } else {
+                    // Sweep moves left-to-right across the mask
+                    let pos = -0.5 + t * 2.0      // -0.5 → 1.5 over the cycle
+                    LinearGradient(
+                        gradient: Gradient(stops: [
+                            .init(color: Color.clear,                            location: 0.00),
+                            .init(color: Theme.Palette.teal.opacity(0.65),       location: 0.50),
+                            .init(color: Color.clear,                            location: 1.00),
+                        ]),
+                        startPoint: UnitPoint(x: pos - 0.18, y: 0.3),
+                        endPoint:   UnitPoint(x: pos + 0.18, y: 0.7)
+                    )
+                    .blendMode(.plusLighter)
+                    .opacity(opacity)
+                }
+            }
         }
     }
 
@@ -450,9 +475,10 @@ struct ShimmerOverlay: View {
 
 // ─── Pulsing ring around the now-cursor dot ─────────────────────────
 struct PulseRing: View {
+    var active: Bool = true
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1/30, paused: false)) { ctx in
-            let t = ctx.date.timeIntervalSinceReferenceDate
+        AmbientTimeline(fps: 30, active: active) { now in
+            let t = now.timeIntervalSinceReferenceDate
             let phase = sin(t * .pi) // 2s cycle
             let r = 4 + phase * 4
             let opacity = 0.18 - phase * 0.12
@@ -484,8 +510,8 @@ struct ProgressArc: View {
 // ─── Title breathing scale (echoes the .breathe class) ──────────────
 struct BreathingScale: ViewModifier {
     func body(content: Content) -> some View {
-        TimelineView(.animation(minimumInterval: 1/30, paused: false)) { ctx in
-            let t = ctx.date.timeIntervalSinceReferenceDate
+        AmbientTimeline(fps: 30) { now in
+            let t = now.timeIntervalSinceReferenceDate
             let s = 1.0 + sin(t * (2 * .pi / 5.5)) * 0.006
             content.scaleEffect(s, anchor: .center)
         }

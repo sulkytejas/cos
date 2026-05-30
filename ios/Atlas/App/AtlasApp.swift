@@ -43,19 +43,28 @@ struct AtlasApp: App {
 
     @State private var splashDone: Bool = false
 
+    /// While `true`, the app launches into the Ayumi v0.6 redesign (the new
+    /// shell + screens). Flip to `false` to restore the legacy v0.3 UI.
+    private static let showAyumi = true
+
     var body: some Scene {
         WindowGroup {
-            ZStack {
-                RootView()
+            if Self.showAyumi {
+                AyumiRoot()
                     .preferredColorScheme(.light)
-                    .tint(Theme.Palette.moss)
-                    .opacity(splashDone ? 1 : 0)
+            } else {
+                ZStack {
+                    RootView()
+                        .preferredColorScheme(.light)
+                        .tint(Theme.Palette.moss)
+                        .opacity(splashDone ? 1 : 0)
 
-                if !splashDone {
-                    SplashView(onComplete: {
-                        splashDone = true
-                    })
-                    .transition(.opacity)
+                    if !splashDone {
+                        SplashView(onComplete: {
+                            splashDone = true
+                        })
+                        .transition(.opacity)
+                    }
                 }
             }
         }

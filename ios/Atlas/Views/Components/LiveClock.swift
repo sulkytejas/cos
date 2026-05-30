@@ -13,9 +13,9 @@ struct LiveClock: View {
     }
 
     private func formatted(_ date: Date) -> String {
-        let f = DateFormatter()
-        f.dateFormat = "HH:mm:ss"
-        return f.string(from: date)
+        // Cached static formatter — building a DateFormatter every second in
+        // the always-visible header is pure churn (see PERFORMANCE_REVIEW.md).
+        AtlasFormat.clockHMS.string(from: date)
     }
 }
 
@@ -27,68 +27,76 @@ struct CompassDial: View {
     var size: CGFloat = 56
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1/30, paused: false)) { ctx in
-            let t = ctx.date.timeIntervalSinceReferenceDate
-            // A real compass needle never sits perfectly still — it slowly
-            // hunts around true north. Combine a long-period drift with a
-            // shorter wobble to feel alive but unhurried.
-            let drift  = sin(t * (2 * .pi / 48)) * 18      // ±18° over 48s
-            let wobble = sin(t * (2 * .pi / 4.2)) *  3      // ±3°  over 4.2s
-            let needleAngle = drift + wobble
-
-            ZStack {
-                // Outer hairline ring
-                Circle()
-                    .strokeBorder(Theme.Palette.hairline, lineWidth: 0.8)
-
-                // Inner dashed ring
-                Circle()
-                    .strokeBorder(
-                        Theme.Palette.hairline.opacity(0.55),
-                        style: StrokeStyle(lineWidth: 0.6, dash: [1.6, 3.6])
-                    )
-                    .padding(size * 0.18)
-
-                // Cardinal tick marks at N / E / S / W
-                ForEach(0..<4, id: \.self) { i in
-                    Rectangle()
-                        .fill(Theme.Palette.inkFaint.opacity(0.6))
-                        .frame(width: 0.8, height: size * 0.07)
-                        .offset(y: -size * 0.465)
-                        .rotationEffect(.degrees(Double(i) * 90))
-                }
-
-                // "N" label at 12 o'clock
-                Text("N")
-                    .font(Theme.Font.mono(7.5, weight: .medium))
-                    .tracking(0.4)
-                    .foregroundStyle(Theme.Palette.inkFaint)
-                    .offset(y: -size * 0.34)
-
-                // Compass needle — a tall lozenge.
-                // The two halves use opposite colours so it reads as a needle
-                // even though we only draw a single shape.
-                ZStack {
-                    // North half (teal) — points up
-                    Triangle()
-                        .fill(Theme.Palette.teal)
-                        .frame(width: size * 0.10, height: size * 0.36)
-                        .offset(y: -size * 0.09)
-                    // South half (ink) — points down, slightly thinner so the
-                    // north end visually dominates (compass convention)
-                    Triangle()
-                        .fill(Theme.Palette.ink)
-                        .frame(width: size * 0.08, height: size * 0.30)
-                        .rotationEffect(.degrees(180))
-                        .offset(y: size * 0.07)
-                    // Pivot dot
-                    Circle()
-                        .fill(Theme.Palette.ink)
-                        .frame(width: 2.4, height: 2.4)
-                }
-                .rotationEffect(.degrees(needleAngle))
+        ZStack {
+            // Rings / ticks / label are static — built once, hoisted out of the
+            // per-frame closure so only the needle rotates each tick.
+            staticDial
+            // The needle hunts around north: a slow drift + a short wobble.
+            // 12fps is ample for a 48s drift, and it's gated (freezes off-screen
+            // / low-power / reduce-motion). See PERFORMANCE_REVIEW.md H1.
+            AmbientTimeline(fps: 12) { now in
+                let t = now.timeIntervalSinceReferenceDate
+                let drift  = sin(t * (2 * .pi / 48)) * 18      // ±18° over 48s
+                let wobble = sin(t * (2 * .pi / 4.2)) *  3      // ±3°  over 4.2s
+                needle.rotationEffect(.degrees(drift + wobble))
             }
-            .frame(width: size, height: size)
+        }
+        .frame(width: size, height: size)
+    }
+
+    private var staticDial: some View {
+        ZStack {
+            // Outer hairline ring
+            Circle()
+                .strokeBorder(Theme.Palette.hairline, lineWidth: 0.8)
+
+            // Inner dashed ring
+            Circle()
+                .strokeBorder(
+                    Theme.Palette.hairline.opacity(0.55),
+                    style: StrokeStyle(lineWidth: 0.6, dash: [1.6, 3.6])
+                )
+                .padding(size * 0.18)
+
+            // Cardinal tick marks at N / E / S / W
+            ForEach(0..<4, id: \.self) { i in
+                Rectangle()
+                    .fill(Theme.Palette.inkFaint.opacity(0.6))
+                    .frame(width: 0.8, height: size * 0.07)
+                    .offset(y: -size * 0.465)
+                    .rotationEffect(.degrees(Double(i) * 90))
+            }
+
+            // "N" label at 12 o'clock
+            Text("N")
+                .font(Theme.Font.mono(7.5, weight: .medium))
+                .tracking(0.4)
+                .foregroundStyle(Theme.Palette.inkFaint)
+                .offset(y: -size * 0.34)
+        }
+        .frame(width: size, height: size)
+    }
+
+    // Compass needle — a tall lozenge. The two halves use opposite colours so
+    // it reads as a needle even though we only draw a single shape.
+    private var needle: some View {
+        ZStack {
+            // North half (teal) — points up
+            Triangle()
+                .fill(Theme.Palette.teal)
+                .frame(width: size * 0.10, height: size * 0.36)
+                .offset(y: -size * 0.09)
+            // South half (ink) — points down, slightly thinner so the
+            // north end visually dominates (compass convention)
+            Triangle()
+                .fill(Theme.Palette.ink)
+                .frame(width: size * 0.08, height: size * 0.30)
+                .rotationEffect(.degrees(180))
+                .offset(y: size * 0.07)
+            // Pivot dot
+            Circle()
+                .fill(Theme.Palette.ink)
+                .frame(width: 2.4, height: 2.4)
         }
     }
 }

@@ -147,41 +147,9 @@ struct ReviewQueueView: View {
     // MARK: - Actions
 
     private func approve(_ p: Proposal) {
-        // Materialise the proposal into a real record.
-        let chapter = p.chapter
-        switch p.type {
-        case .todo:
-            if let d = decode(p.proposedPayloadJSON), let text = d["text"] as? String {
-                let t = Todo(text: text, chapter: chapter)
-                t.source = .extracted
-                if let due = d["due"] as? String, let date = ISO8601DateFormatter().date(from: due) {
-                    t.dueDate = date
-                }
-                context.insert(t)
-            }
-        case .decision:
-            if let d = decode(p.proposedPayloadJSON), let title = d["title"] as? String {
-                let rationale = (d["rationale"] as? String) ?? ""
-                context.insert(Decision(title: title, rationale: rationale, decidedAt: Date(), chapter: chapter))
-            }
-        case .journalEntry:
-            if let d = decode(p.proposedPayloadJSON), let content = d["content"] as? String {
-                context.insert(Entry(date: Date(), content: content, source: .manual, chapter: chapter))
-            }
-        case .chapter:
-            if let d = decode(p.proposedPayloadJSON),
-               let title = d["title"] as? String,
-               let typeStr = d["type"] as? String,
-               let ctype = ChapterType(rawValue: typeStr) {
-                context.insert(Chapter(title: title, type: ctype, purpose: d["purpose"] as? String))
-            }
-        case .chapterLink:
-            // Skip for now — link creation needs both chapter UUIDs.
-            break
-        }
-        p.status = .approved
-        p.decidedAt = Date()
-        chapter?.touch()
+        // Materialisation lives on Proposal so the Review queue and the
+        // "Ayumi noticed" card share one code path.
+        p.materialize(in: context)
         try? context.save()
     }
 
@@ -189,10 +157,6 @@ struct ReviewQueueView: View {
         p.status = .dismissed
         p.decidedAt = Date()
         try? context.save()
-    }
-
-    private func decode(_ data: Data) -> [String: Any]? {
-        try? JSONSerialization.jsonObject(with: data) as? [String: Any]
     }
 }
 

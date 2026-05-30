@@ -8,9 +8,31 @@ import SwiftData
 struct DecisionsTab: View {
     @Bindable var chapter: Chapter
     @Environment(\.modelContext) private var context
+    @Query(filter: #Predicate<Proposal> { $0.statusRaw == "pending" && $0.typeRaw == "decision" })
+    private var openDecisionProposals: [Proposal]
+
+    /// The decision Ayumi has noticed forming in *this* chapter, if any.
+    private var noticed: Proposal? {
+        openDecisionProposals.first { $0.chapter?.id == chapter.id }
+    }
+
+    private func topic(for p: Proposal) -> String {
+        if let d = try? JSONSerialization.jsonObject(with: p.proposedPayloadJSON) as? [String: Any],
+           let t = d["title"] as? String, !t.isEmpty {
+            return t
+        }
+        return p.summary ?? "something forming here"
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
+            if let p = noticed {
+                AtlasNoticedCard(
+                    topic: topic(for: p),
+                    onFormalize: { p.materialize(in: context); try? context.save() },
+                    onDismiss: { p.status = .dismissed; p.decidedAt = Date(); try? context.save() }
+                )
+            }
             if chapter.decisions.isEmpty {
                 Text("No decisions logged for this chapter.")
                     .font(Theme.Font.serifItalic(15))

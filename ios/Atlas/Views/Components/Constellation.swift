@@ -69,12 +69,7 @@ struct ConstellationView: View {
             .onChange(of: chapters.count) { _, _ in ensureSeeded() }
         }
         .frame(height: CARD_H)
-        .background(Theme.Palette.card)
-        .overlay(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .strokeBorder(Theme.Palette.hairline, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .materialA()
         .padding(.horizontal, 22)
     }
 
@@ -388,9 +383,8 @@ struct ConstellationView: View {
     }
 
     private func shortDueLabel(_ d: Date) -> String {
-        let f = DateFormatter()
-        f.dateFormat = "MMM d"
-        return f.string(from: d)
+        // Reuse the cached "MMM d" static rather than building one per render.
+        AtlasFormat.shortDay.string(from: d)
     }
 
     // ─── Long-press / gravity ─────────────────────────────────────
@@ -429,6 +423,11 @@ struct FloatingGlyph: View {
     var fontSize: CGFloat = 56
     var paused: Bool = false
 
+    /// Resolved once per `iconData` change — NOT decoded/cropped every frame.
+    /// The crop is a full-image pixel scan; doing it inside the 30fps timeline
+    /// body was the H5 hot path. Off-main so the launch/scroll frames stay free.
+    @State private var cropped: UIImage?
+
     var body: some View {
         TimelineView(.animation(minimumInterval: 1/30, paused: paused)) { ctx in
             let t = ctx.date.timeIntervalSinceReferenceDate
@@ -445,7 +444,7 @@ struct FloatingGlyph: View {
             }()
 
             Group {
-                if let data = iconData, let img = IconCropping.cropped(data) {
+                if let img = cropped {
                     Image(uiImage: img)
                         .resizable()
                         .interpolation(.high)
@@ -460,6 +459,14 @@ struct FloatingGlyph: View {
             }
             .offset(offset)
             .animation(.spring(response: 0.54, dampingFraction: 0.78), value: fontSize)
+        }
+        .task(id: iconData) {
+            guard let data = iconData else { cropped = nil; return }
+            // Decode + pixel-scan crop on a background executor; only the
+            // resulting UIImage hops back to the main actor.
+            cropped = await Task.detached(priority: .utility) {
+                IconCropping.cropped(data)
+            }.value
         }
     }
 }

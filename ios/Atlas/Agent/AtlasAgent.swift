@@ -125,12 +125,27 @@ actor AtlasAgent {
 
     private func drainPendingEvents(in ctx: ModelContext) async throws {
         let pendingRaw = EventStatus.pending.rawValue
-        var descriptor = FetchDescriptor<AppEvent>(
-            predicate: #Predicate { $0.statusRaw == pendingRaw },
+        let captureRaw = EventType.captureReceived.rawValue
+        let cap = 2   // soft cap per tick (keeps under the org input-token/min rate limit)
+
+        // User captures jump the queue ahead of background events (watchers, scans).
+        var capDesc = FetchDescriptor<AppEvent>(
+            predicate: #Predicate { $0.statusRaw == pendingRaw && $0.typeRaw == captureRaw },
             sortBy: [SortDescriptor(\.createdAt, order: .forward)]
         )
-        descriptor.fetchLimit = 6   // soft cap per tick
-        let pending = try ctx.fetch(descriptor)
+        capDesc.fetchLimit = cap
+        let captures = try ctx.fetch(capDesc)
+
+        var rest: [AppEvent] = []
+        if captures.count < cap {
+            var restDesc = FetchDescriptor<AppEvent>(
+                predicate: #Predicate { $0.statusRaw == pendingRaw && $0.typeRaw != captureRaw },
+                sortBy: [SortDescriptor(\.createdAt, order: .forward)]
+            )
+            restDesc.fetchLimit = cap - captures.count
+            rest = try ctx.fetch(restDesc)
+        }
+        let pending = captures + rest
         pendingEventCount = (try? ctx.fetchCount(
             FetchDescriptor<AppEvent>(predicate: #Predicate { $0.statusRaw == pendingRaw })
         )) ?? pending.count

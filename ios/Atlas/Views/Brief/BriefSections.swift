@@ -65,9 +65,6 @@ private struct Avatar: View {
         ZStack {
             Circle()
                 .fill(Theme.Palette.bgSunk)
-                .overlay(
-                    Circle().strokeBorder(Theme.Palette.hairline, lineWidth: 1)
-                )
             Text(text)
                 .font(Theme.Font.serifItalic(18))
                 .foregroundStyle(Theme.Palette.inkSecondary)
@@ -140,7 +137,7 @@ struct PredictionBlock: View {
                     .padding(.vertical, 11)
                     if idx < data.items.count - 1 {
                         Rectangle()
-                            .fill(Theme.Palette.hairline.opacity(0.5))
+                            .fill(Theme.Palette.hairlineSoft)
                             .frame(height: 1)
                     }
                 }
@@ -196,7 +193,7 @@ struct MaterialsChecklist: View {
                     .onTapGesture { ready[item.id] = !isReady }
                     if idx < data.items.count - 1 {
                         Rectangle()
-                            .fill(Theme.Palette.hairline.opacity(0.5))
+                            .fill(Theme.Palette.hairlineSoft)
                             .frame(height: 1)
                     }
                 }
@@ -270,8 +267,7 @@ struct TacticalNote: View {
             .padding(.vertical, 16)
             .padding(.trailing, 18)
         }
-        .background(Theme.Palette.bgSunk)
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .materialB(tint: .forest)
         .padding(.vertical, 12)
     }
 }
@@ -360,7 +356,7 @@ struct WatcherCardSection: View {
         HStack(alignment: .top, spacing: 12) {
             ZStack {
                 Circle()
-                    .strokeBorder(Theme.Palette.hairline, lineWidth: 1)
+                    .fill(Theme.Palette.bgSunk)
                 WatcherIcon(size: 14)
             }
             .frame(width: 28, height: 28)
@@ -380,12 +376,8 @@ struct WatcherCardSection: View {
             }
         }
         .padding(14)
-        .background(Theme.Palette.card)
-        .overlay(
-            RoundedRectangle(cornerRadius: 6)
-                .strokeBorder(Theme.Palette.hairline, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        // Brief section rendered in a scroll → single-shadow elevation. (H4)
+        .cardElevation()
         .padding(.vertical, 12)
     }
 }
@@ -414,7 +406,7 @@ struct DiffBlock: View {
                     .padding(.vertical, 9)
                     if idx < data.items.count - 1 {
                         Rectangle()
-                            .fill(Theme.Palette.hairline.opacity(0.5))
+                            .fill(Theme.Palette.hairlineSoft)
                             .frame(height: 1)
                     }
                 }
@@ -461,7 +453,7 @@ private struct BriefSectionContainer<Content: View>: View {
         .padding(.vertical, 18)
         .overlay(alignment: .bottom) {
             Rectangle()
-                .fill(Theme.Palette.hairline.opacity(0.5))
+                .fill(Theme.Palette.hairlineSoft)
                 .frame(height: 1)
         }
     }
@@ -478,7 +470,7 @@ struct FallbackSection: View {
             .padding(.vertical, 18)
             .overlay(alignment: .bottom) {
                 Rectangle()
-                    .fill(Theme.Palette.hairline.opacity(0.5))
+                    .fill(Theme.Palette.hairlineSoft)
                     .frame(height: 1)
             }
     }

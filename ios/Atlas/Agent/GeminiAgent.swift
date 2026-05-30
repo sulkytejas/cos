@@ -35,19 +35,8 @@ enum GeminiAgent {
         }
     }
 
-    /// The result of an agent run — the final text reply plus a trace of
-    /// the tool calls made, for logging into Brief.agentTraceJSON.
-    struct RunResult {
-        let finalText: String
-        let trace: [TraceStep]
-    }
-
-    struct TraceStep: Codable {
-        let kind: String        // "tool_call" | "tool_result" | "text"
-        let name: String?
-        let input: String?
-        let output: String?
-    }
+    // RunResult and TraceStep are now provider-neutral types in LLMClient.swift,
+    // shared by every engine. GeminiAgent.run still returns a RunResult.
 
     /// Run an agent loop. `userTurns` is the initial user message(s); the
     /// system prompt is prepended via systemInstruction (Gemini supports
@@ -214,65 +203,21 @@ enum GeminiAgent {
     }
 }
 
-// MARK: - Tool registry + result
+// MARK: - LLMClient conformance
 
-/// A tool result — `payload` becomes the `functionResponse.response` body
-/// sent back to Gemini. Use `.ok(...)` for normal returns, `.error(...)` to
-/// surface a problem the model can recover from (e.g. "no such chapter").
-enum ToolResult {
-    case ok([String: Any])
-    case error(String)
-
-    var payload: [String: Any] {
-        switch self {
-        case .ok(let dict): return dict
-        case .error(let s): return ["error": s]
-        }
-    }
-}
-
-/// A protocol every tool implements. `name` matches the Gemini
-/// `functionCall.name`. `schema` is the JSONSchema for `parameters`.
-protocol AgentTool {
-    var name: String { get }
-    var description: String { get }
-    var parameters: [String: Any] { get }
-    func dispatch(args: [String: Any]) async throws -> ToolResult
-}
-
-/// Registry of all tools available in a given agent invocation. Built fresh
-/// per event so each tool can capture its own ModelContext.
-struct ToolRegistry {
-    private var tools: [String: AgentTool] = [:]
-
-    mutating func register(_ tool: AgentTool) {
-        tools[tool.name] = tool
+/// Gemini as a swappable Atlas engine. `ClaudeClient` is the default (see
+/// `AtlasLLM.client`); assign `GeminiTextClient()` there to run on Gemini
+/// instead. The loop above is unchanged — this only adapts it to `LLMClient`.
+///
+/// `ToolResult`, `AgentTool`, `ToolRegistry`, and `jsonCompact` now live in
+/// LLMClient.swift so every engine shares them.
+struct GeminiTextClient: LLMClient {
+    var isConfigured: Bool {
+        UserDefaults.standard.string(forKey: "GeminiAPIKey")?
+            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
     }
 
-    func functionDeclarations() -> [[String: Any]] {
-        tools.values.map { t in
-            [
-                "name": t.name,
-                "description": t.description,
-                "parameters": t.parameters
-            ]
-        }
+    func run(userText: String, tools: ToolRegistry) async throws -> RunResult {
+        try await GeminiAgent.run(userText: userText, tools: tools)
     }
-
-    func dispatch(name: String, args: [String: Any]) async throws -> ToolResult {
-        guard let t = tools[name] else {
-            throw GeminiAgent.AgentError.toolNotFound(name)
-        }
-        return try await t.dispatch(args: args)
-    }
-}
-
-// MARK: - JSON helpers
-
-func jsonCompact(_ any: Any) -> String {
-    if let data = try? JSONSerialization.data(withJSONObject: any, options: []),
-       let s = String(data: data, encoding: .utf8) {
-        return s
-    }
-    return String(describing: any)
 }

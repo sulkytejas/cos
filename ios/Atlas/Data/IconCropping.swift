@@ -6,18 +6,25 @@ import UIKit
 /// and at display time (to fix images that were saved with whitespace before
 /// this code existed).
 enum IconCropping {
-    /// In-memory cache of (data identity → cropped UIImage). Keyed by an
-    /// inexpensive hash of the raw bytes so we don't re-crop every render.
-    private static var cache: [Int: UIImage] = [:]
+    /// Cropped-image cache. `NSCache` (not a raw `[Int: UIImage]`) because it is
+    /// (a) thread-safe — `cropped(_:)` is now called from a background executor
+    /// — and (b) self-evicting under memory pressure, so decoded ~1MB bitmaps
+    /// can't accumulate into a jetsam. Keyed by full `NSData` identity, so no
+    /// hash collisions between distinct icons. See PERFORMANCE_REVIEW.md H5.
+    private static let cache: NSCache<NSData, UIImage> = {
+        let c = NSCache<NSData, UIImage>()
+        c.countLimit = 64
+        return c
+    }()
 
     /// Returns the cropped UIImage for some PNG/JPEG bytes — using the cache
-    /// when we've seen these bytes before.
+    /// when we've seen these bytes before. Safe to call off the main thread.
     static func cropped(_ data: Data) -> UIImage? {
-        let key = data.count.hashValue ^ data.prefix(16).hashValue
-        if let cached = cache[key] { return cached }
+        let key = data as NSData
+        if let cached = cache.object(forKey: key) { return cached }
         guard let original = UIImage(data: data) else { return nil }
         let trimmed = original.croppedToContent() ?? original
-        cache[key] = trimmed
+        cache.setObject(trimmed, forKey: key, cost: data.count)
         return trimmed
     }
 

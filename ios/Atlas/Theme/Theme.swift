@@ -11,6 +11,7 @@ enum Theme {
         // Hairlines
         static let hairline = Color("ColorBorderWarm")           // ink @ 0.10
         static let hairlineStrong = Color("ColorBorderWarmStrong") // ink @ 0.20
+        static let hairlineSoft = Color(red: 20/255, green: 30/255, blue: 36/255).opacity(0.06) // v0.3 row/section rule
         // Legacy aliases
         static var borderWarm: Color { hairline }
         static var borderWarmStrong: Color { hairlineStrong }
@@ -134,21 +135,180 @@ struct Hairline: View {
     }
 }
 
-// ─── Card surface ────────────────────────────────────────────────────
-struct CardBackground: ViewModifier {
-    var radius: CGFloat = Theme.Radii.md
+// ─── v0.3 Material system ────────────────────────────────────────────
+// Three substances under one light source (top-left, ~30°). Containers no
+// longer carry hairline borders — separation comes from material + shadow.
+// Defined once here and applied via `.materialA/.materialB/.materialC` (and
+// `.card()`, which is Material A), so there is a single source of truth for
+// every elevated surface.
+
+/// Ink used for shadows + soft rules (#141e24 — the v0.3 `--hairline` base).
+private let inkRule = Color(red: 20/255, green: 30/255, blue: 36/255)
+
+/// Vellum tint options for Material B.
+enum MaterialTint { case none, teal, forest }
+
+/// The raking-light shadow stack (one light source, top-left). Single source of
+/// truth for every material's cast; `pressed` tightens it for the press state.
+private struct RakingShadow: ViewModifier {
+    var pressed: Bool = false
     func body(content: Content) -> some View {
         content
-            .background(Theme.Palette.card)
+            .shadow(color: inkRule.opacity(0.04), radius: 0.5, x: 0, y: 0.5)
+            .shadow(color: inkRule.opacity(pressed ? 0.05 : 0.07),
+                    radius: pressed ? 3 : 5, x: 1, y: pressed ? 1.5 : 3)
+            .shadow(color: inkRule.opacity(pressed ? 0.08 : 0.12),
+                    radius: pressed ? 6 : 11, x: 3, y: pressed ? 4 : 8)
+    }
+}
+
+/// The 1px top highlight that catches the raking light.
+private struct TopHighlight: ViewModifier {
+    var radius: CGFloat
+    func body(content: Content) -> some View {
+        content.overlay(
+            RoundedRectangle(cornerRadius: radius, style: .continuous)
+                .strokeBorder(
+                    LinearGradient(colors: [.white.opacity(0.6), .white.opacity(0)],
+                                   startPoint: .top, endPoint: .bottom),
+                    lineWidth: 0.75)
+                .blendMode(.plusLighter)
+                .allowsHitTesting(false)
+        )
+    }
+}
+
+/// The raking-light "lift" — directional shadow + top highlight, *no background*.
+/// For surfaces that supply their own fill (e.g. TempoNow's animated aura) so
+/// they match Material A's elevation without a second background layer.
+struct MaterialLift: ViewModifier {
+    var radius: CGFloat = Theme.Radii.lg
+    var pressed: Bool = false
+    func body(content: Content) -> some View {
+        content.modifier(RakingShadow(pressed: pressed)).modifier(TopHighlight(radius: radius))
+    }
+}
+
+/// Material A — paper under raking light. The default elevated surface: white
+/// fill, no border, the raking-light lift. `pressed` tightens the cast.
+struct MaterialA: ViewModifier {
+    var radius: CGFloat = Theme.Radii.lg
+    var pressed: Bool = false
+    func body(content: Content) -> some View {
+        content
+            .background(RoundedRectangle(cornerRadius: radius, style: .continuous).fill(Theme.Palette.card))
+            .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+            .modifier(MaterialLift(radius: radius, pressed: pressed))
+    }
+}
+
+/// Material B — vellum. A translucent supporting surface that lets the page
+/// tone bleed through; optional teal/forest tint. No outer shadow.
+struct MaterialB: ViewModifier {
+    var tint: MaterialTint = .none
+    var radius: CGFloat = Theme.Radii.md
+    private var tintColor: Color {
+        switch tint {
+        case .none:   return .clear
+        case .teal:   return Theme.Palette.teal
+        case .forest: return Theme.Palette.forest
+        }
+    }
+    func body(content: Content) -> some View {
+        content
+            .background(RoundedRectangle(cornerRadius: radius, style: .continuous)
+                .fill(Color(red: 0.988, green: 0.988, blue: 0.980).opacity(0.5)))
+            .background(RoundedRectangle(cornerRadius: radius, style: .continuous)
+                .fill(tintColor.opacity(0.05)))
             .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: radius, style: .continuous)
-                    .strokeBorder(Theme.Palette.hairline, lineWidth: 1)
+                    .strokeBorder(.white.opacity(0.55), lineWidth: 0.5)
+                    .blendMode(.plusLighter)
+                    .allowsHitTesting(false)
             )
     }
 }
+
+/// Material C — pressed specimen. Lifted higher than A with a longer, slightly
+/// asymmetric cast. Used sparingly: only the agentic "noticed" ask.
+struct MaterialC: ViewModifier {
+    var radius: CGFloat = Theme.Radii.lg
+    func body(content: Content) -> some View {
+        content
+            .background(RoundedRectangle(cornerRadius: radius, style: .continuous).fill(Color.white))
+            .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+            .shadow(color: inkRule.opacity(0.05), radius: 0.5, x: 0, y: 1)
+            .shadow(color: inkRule.opacity(0.08), radius: 7, x: 3, y: 6)
+            .shadow(color: inkRule.opacity(0.15), radius: 14, x: 6, y: 16)
+            .shadow(color: inkRule.opacity(0.10), radius: 22, x: 10, y: 28)
+    }
+}
+
 extension View {
-    func card(radius: CGFloat = Theme.Radii.md) -> some View {
+    /// Material A — default elevated surface. Pass `pressed:` for the press state.
+    func materialA(radius: CGFloat = Theme.Radii.lg, pressed: Bool = false) -> some View {
+        modifier(MaterialA(radius: radius, pressed: pressed))
+    }
+    /// Raking-light lift (shadow + top highlight) with no background — for
+    /// surfaces that already supply their own fill.
+    func materialLift(radius: CGFloat = Theme.Radii.lg, pressed: Bool = false) -> some View {
+        modifier(MaterialLift(radius: radius, pressed: pressed))
+    }
+    /// Material B — vellum supporting surface, optionally tinted.
+    func materialB(tint: MaterialTint = .none, radius: CGFloat = Theme.Radii.md) -> some View {
+        modifier(MaterialB(tint: tint, radius: radius))
+    }
+    /// Material C — pressed specimen; use only for the agentic "noticed" ask.
+    func materialC(radius: CGFloat = Theme.Radii.lg) -> some View {
+        modifier(MaterialC(radius: radius))
+    }
+}
+
+// ─── Lightweight elevation (rows / scrolled content) ─────────────────
+// Material A is three blurred shadow passes + a plusLighter offscreen pass.
+// That cost is fine for a single hero card, but inside a `ForEach`/`ScrollView`
+// — where rows realize and re-rasterize together — it's a scroll-jank tax.
+// `.cardElevation()` gives ~the same read with ONE shadow and no blend mode.
+// Use it for repeated/scrolled rows; reserve Material A for the hero card per
+// screen. See PERFORMANCE_REVIEW.md H4.
+struct CardElevation: ViewModifier {
+    var radius: CGFloat = Theme.Radii.lg
+    /// When true, paints the white card fill + clip (drop-in for Material A).
+    /// Pass `false` for surfaces that already supply their own background
+    /// (e.g. TempoNow's animated aura) so only the shadow is applied.
+    var fill: Bool = true
+    @ViewBuilder func body(content: Content) -> some View {
+        if fill {
+            content
+                .background(RoundedRectangle(cornerRadius: radius, style: .continuous).fill(Theme.Palette.card))
+                .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+                .shadow(color: inkRule.opacity(0.10), radius: 6, x: 1, y: 4)
+        } else {
+            content
+                .shadow(color: inkRule.opacity(0.10), radius: 6, x: 1, y: 4)
+        }
+    }
+}
+extension View {
+    /// One-shadow elevation for repeated/scrolled rows. Use instead of
+    /// `.materialA()` / `.card()` inside any `ForEach` or `ScrollView`.
+    func cardElevation(radius: CGFloat = Theme.Radii.lg, fill: Bool = true) -> some View {
+        modifier(CardElevation(radius: radius, fill: fill))
+    }
+}
+
+// ─── Card surface (v0.3: Material A — no border) ─────────────────────
+// `.card()` now resolves to Material A, so every existing call site adopts the
+// borderless, shadowed surface with no per-site change.
+struct CardBackground: ViewModifier {
+    var radius: CGFloat = Theme.Radii.lg
+    func body(content: Content) -> some View {
+        content.materialA(radius: radius)
+    }
+}
+extension View {
+    func card(radius: CGFloat = Theme.Radii.lg) -> some View {
         modifier(CardBackground(radius: radius))
     }
 }

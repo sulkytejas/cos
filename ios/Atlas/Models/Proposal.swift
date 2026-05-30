@@ -110,3 +110,47 @@ private struct AnyEncodable: Encodable {
     init(_ value: Encodable) { self.value = value }
     func encode(to encoder: Encoder) throws { try value.encode(to: encoder) }
 }
+
+// MARK: - Materialisation
+
+extension Proposal {
+    /// Turn this proposal into the real record it proposes (todo / decision /
+    /// journal entry / chapter) and mark it approved. Single source of truth,
+    /// shared by the Review queue and the "Ayumi noticed" card so the
+    /// materialisation logic isn't duplicated.
+    func materialize(in context: ModelContext) {
+        let payload = (try? JSONSerialization.jsonObject(with: proposedPayloadJSON)) as? [String: Any]
+        switch type {
+        case .todo:
+            if let text = payload?["text"] as? String {
+                let t = Todo(text: text, chapter: chapter)
+                t.source = .extracted
+                if let due = payload?["due"] as? String,
+                   let date = ISO8601DateFormatter().date(from: due) {
+                    t.dueDate = date
+                }
+                context.insert(t)
+            }
+        case .decision:
+            if let title = payload?["title"] as? String {
+                let rationale = (payload?["rationale"] as? String) ?? ""
+                context.insert(Decision(title: title, rationale: rationale, decidedAt: Date(), chapter: chapter))
+            }
+        case .journalEntry:
+            if let content = payload?["content"] as? String {
+                context.insert(Entry(date: Date(), content: content, source: .manual, chapter: chapter))
+            }
+        case .chapter:
+            if let title = payload?["title"] as? String,
+               let typeStr = payload?["type"] as? String,
+               let ctype = ChapterType(rawValue: typeStr) {
+                context.insert(Chapter(title: title, type: ctype, purpose: payload?["purpose"] as? String))
+            }
+        case .chapterLink:
+            break  // needs both chapter UUIDs — handled elsewhere
+        }
+        status = .approved
+        decidedAt = Date()
+        chapter?.touch()
+    }
+}

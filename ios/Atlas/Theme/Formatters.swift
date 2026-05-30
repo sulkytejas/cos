@@ -32,6 +32,23 @@ enum AtlasFormat {
         return f
     }()
 
+    /// Wall-clock HH:mm:ss — used by the always-visible header clock once a
+    /// second, so it must be a cached static (never built per tick).
+    static let clockHMS: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss"
+        return f
+    }()
+
+    /// Cached relative formatter — the one `AtlasFormat` helper that was still
+    /// allocating per call (inside row bodies). DateFormatters are reusable on
+    /// the main thread.
+    private static let relativeFormatter: RelativeDateTimeFormatter = {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .short
+        return f
+    }()
+
     static func range(_ start: Date?, _ end: Date?) -> String {
         guard start != nil || end != nil else { return "ongoing" }
         if let s = start, let e = end {
@@ -48,9 +65,7 @@ enum AtlasFormat {
     }
 
     static func relative(_ date: Date) -> String {
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .short
-        return formatter.localizedString(for: date, relativeTo: Date())
+        relativeFormatter.localizedString(for: date, relativeTo: Date())
     }
 
     static func daysUntil(_ date: Date) -> Int {

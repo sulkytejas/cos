@@ -26,3 +26,6 @@ ios/Package.resolved
 ios/**/xcuserdata/
 ios/**/*.xcuserstate
 *.DS_Store
+
+# Local design handoff reference (not source)
+designs temp/

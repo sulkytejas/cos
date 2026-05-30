@@ -120,12 +120,7 @@ struct CaptureSheet: View {
                 .padding(.horizontal, 14)
                 .padding(.bottom, 8)
             }
-            .background(Theme.Palette.card)
-            .overlay(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .strokeBorder(Theme.Palette.hairline, lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .materialA()
             .padding(.horizontal, 22)
             .padding(.top, 14)
 
