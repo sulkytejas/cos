@@ -5,6 +5,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { db, schema } from "./db";
+import { BOOTSTRAP_USER_ID } from "../../src/db/schema";
 import type { AgentResult, AgentTraceEntry, BriefOutput } from "./agent/loop";
 import { BriefStructure } from "../../src/lib/brief-schema";
 
@@ -17,10 +18,21 @@ export interface PersistedBrief {
 /** Confidence threshold above which a proposal is filed immediately. */
 const FILE_THRESHOLD = 0.85;
 
+/**
+ * Persist the agent's output (§4.d/§4.f). Every row is stamped with the owning
+ * `userId` (defaulting to the single-tenant bootstrap operator) and a fresh
+ * `updatedAt`, so the API's per-user reads and a future cursor-by-`updatedAt`
+ * sync see worker-written rows correctly.
+ */
 export function persistAgentResult(
   result: AgentResult,
-  opts: { chapterId?: string | null } = {}
+  opts: {
+    chapterId?: string | null;
+    generatedByEventId?: string | null;
+    userId?: string;
+  } = {}
 ): PersistedBrief {
+  const userId = opts.userId ?? BOOTSTRAP_USER_ID;
   if (!result.brief) {
     return { briefId: null, proposalIds: [], watcherIds: [] };
   }
@@ -41,6 +53,7 @@ export function persistAgentResult(
   db.insert(schema.briefs)
     .values({
       id: briefId,
+      userId,
       chapterId: opts.chapterId ?? o.chapter_id ?? null,
       title: o.title ?? "Untitled brief",
       situationDescription: o.situation ?? "",
@@ -61,6 +74,8 @@ export function persistAgentResult(
         error: result.error ?? null,
         validation: structureValidation.success ? "ok" : structureValidation.error.flatten(),
       },
+      generatedByEventId: opts.generatedByEventId ?? null,
+      updatedAt: now,
     })
     .run();
 
@@ -72,6 +87,7 @@ export function persistAgentResult(
     db.insert(schema.proposals)
       .values({
         id: pid,
+        userId,
         type: (p.type ?? "todo") as schema.ProposalType,
         proposedPayload: p.payload as unknown,
         sourceBriefId: briefId,
@@ -88,12 +104,17 @@ export function persistAgentResult(
         options: p.options ?? null,
         decidedAt: isFiled ? now : null,
         decidedPayload: isFiled ? p.payload : null,
+        generatedByEventId: opts.generatedByEventId ?? null,
+        updatedAt: now,
       })
       .run();
     proposalIds.push(pid);
 
-    // If filed, also write the payload into the canonical table now.
-    if (isFiled) writePayload(p.type, p.payload, p.chapter_id ?? null, briefId);
+    // If filed, also write the payload into the canonical table now. Stamp the
+    // proposal id (pid) so the canonical row is idempotent (§4.d): a crash-
+    // recovery re-run of this event can't double-file the same todo/decision/
+    // entry — the unique `sourceProposalId` collapses it via ON CONFLICT.
+    if (isFiled) writePayload(userId, p.type, p.payload, p.chapter_id ?? null, briefId, pid);
   }
 
   // 4) Write watchers
@@ -106,6 +127,7 @@ export function persistAgentResult(
     db.insert(schema.watchers)
       .values({
         id: wid,
+        userId,
         chapterId: w.chapter_id ?? null,
         description: w.description,
         prompt: w.prompt,
@@ -114,6 +136,7 @@ export function persistAgentResult(
         cadenceMinutes: w.cadence_minutes ?? 180,
         cadenceLabel: w.cadence_label ?? null,
         status: "active",
+        updatedAt: now,
       })
       .run();
     watcherIds.push(wid);
@@ -123,39 +146,54 @@ export function persistAgentResult(
 }
 
 /** Same canonical-write logic as the proposal router. Kept duplicated rather than
- * shared because worker and web are separate processes / different import roots. */
+ * shared because worker and web are separate processes / different import roots.
+ * Stamps the owning `userId` and `updatedAt` on every row (§4.d/§4.f). */
 function writePayload(
+  userId: string,
   type: string,
   payload: Record<string, unknown>,
   chapterId: string | null,
-  briefId: string
+  briefId: string,
+  proposalId: string
 ) {
   const cid = chapterId ?? (payload.chapterId as string | undefined);
   if (!cid) return;
+  const now = new Date().toISOString();
+  // §4.d: stamp `sourceProposalId` + bare `ON CONFLICT DO NOTHING` (the unique
+  // index is partial, so a named target wouldn't match) so a crash-recovery
+  // re-run of the generating event can't double-file the canonical row.
   switch (type) {
     case "todo":
       db.insert(schema.todos)
         .values({
           id: randomUUID(),
+          userId,
           chapterId: cid,
           text: payload.text as string,
           dueDate: (payload.dueDate as string | undefined) ?? null,
           source: "extracted",
           sourceBriefId: briefId,
+          sourceProposalId: proposalId,
+          updatedAt: now,
         })
+        .onConflictDoNothing()
         .run();
       return;
     case "decision":
       db.insert(schema.decisions)
         .values({
           id: randomUUID(),
+          userId,
           chapterId: cid,
           title: payload.title as string,
           rationale: (payload.rationale as string | undefined) ?? null,
-          decidedAt: (payload.decidedAt as string | undefined) ?? new Date().toISOString(),
+          decidedAt: (payload.decidedAt as string | undefined) ?? now,
           source: "extracted",
           sourceBriefId: briefId,
+          sourceProposalId: proposalId,
+          updatedAt: now,
         })
+        .onConflictDoNothing()
         .run();
       return;
     case "journal_entry":
@@ -163,12 +201,16 @@ function writePayload(
       db.insert(schema.entries)
         .values({
           id: randomUUID(),
+          userId,
           chapterId: cid,
-          date: (payload.date as string | undefined) ?? new Date().toISOString(),
+          date: (payload.date as string | undefined) ?? now,
           content: payload.content as string,
           source: (payload.source as never) ?? "manual",
           sourceBriefId: briefId,
+          sourceProposalId: proposalId,
+          updatedAt: now,
         })
+        .onConflictDoNothing()
         .run();
       return;
     default:

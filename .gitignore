@@ -1,10 +1,17 @@
 node_modules
 .next
-.env*.local
-.DS_Store
-*.log
 *.tsbuildinfo
 next-env.d.ts
+
+# Secrets (SERVER_ARCHITECTURE.md §4.f): ignore EVERY env file — `.env`,
+# `.env.production`, `.env*.local` — so ANTHROPIC_API_KEY / AUTH_TOKEN_PEPPER can
+# never enter git history. Only the committed template is allowed through.
+.env
+.env.*
+!.env.example
+
+.DS_Store
+*.log
 
 # Atlas-specific
 /data/

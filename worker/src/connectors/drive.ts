@@ -1,12 +1,24 @@
 /**
- * Stubbed Drive connector. Same shape as Gmail/Calendar. Real OAuth in v0.3.
+ * Drive connector (SERVER_ARCHITECTURE.md §4.f Phase 5).
+ *
+ * REAL MODE: for every user who connected Google Drive, mint an access token from
+ * their encrypted refresh token, fetch a bounded page of recent changes via the
+ * Drive Changes API (`pageToken`), and ingest through the shared per-user
+ * backpressure path (§4.c). First connect records a `startPageToken` and ingests
+ * nothing, so we only ever surface changes AFTER the connection — never a flood
+ * of the user's entire Drive.
+ *
+ * DEMO MODE (`CONNECTORS_DEMO=1` or no OAuth config): read `fixtures/drive.json`
+ * for the bootstrap operator.
  */
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { db, schema } from "../db";
-import { eq, and } from "drizzle-orm";
-import { randomUUID } from "node:crypto";
+import { ingestSignals, type ConnectorItem } from "./ingest";
+import { isDemoMode } from "./mode";
+import { pollRealForSource } from "./poll-real";
+import { fetchDrive } from "./google-api";
+import { BOOTSTRAP_USER_ID } from "../../../src/db/schema";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -17,34 +29,27 @@ interface Fixture {
   raw: Record<string, unknown>;
 }
 
-export async function pollOnce(): Promise<void> {
+function pollDemo(): void {
   const file = path.join(__dirname, "fixtures", "drive.json");
   if (!fs.existsSync(file)) return;
   const fixtures = JSON.parse(fs.readFileSync(file, "utf-8")) as Fixture[];
-  let inserted = 0;
-  for (const fx of fixtures) {
-    const existing = db
-      .select()
-      .from(schema.signals)
-      .where(
-        and(eq(schema.signals.source, "drive"), eq(schema.signals.externalId, fx.external_id))
-      )
-      .get();
-    if (existing) continue;
-    const id = randomUUID();
-    db.insert(schema.signals)
-      .values({
-        id,
-        source: "drive",
-        externalId: fx.external_id,
-        summary: fx.summary ?? null,
-        rawData: fx.raw,
-      })
-      .run();
-    db.insert(schema.events)
-      .values({ id: randomUUID(), type: "signal_received", payload: { signalId: id } })
-      .run();
-    inserted++;
+  const items: ConnectorItem[] = fixtures.map((fx) => ({
+    externalId: fx.external_id,
+    summary: fx.summary ?? null,
+    raw: fx.raw,
+  }));
+  const { inserted, more } = ingestSignals("drive", items, { userId: BOOTSTRAP_USER_ID });
+  if (inserted > 0) {
+    console.log(
+      `[drive:demo] ingested ${inserted} signal(s)${more ? " (more pending — capped this poll)" : ""}`,
+    );
   }
-  if (inserted > 0) console.log(`[drive] ingested ${inserted} signals`);
+}
+
+export async function pollOnce(): Promise<void> {
+  if (isDemoMode()) {
+    pollDemo();
+    return;
+  }
+  await pollRealForSource("drive", fetchDrive);
 }

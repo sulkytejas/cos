@@ -1,0 +1,74 @@
+# gitleaks config (SERVER_ARCHITECTURE.md §4.f)
+#
+# Stops the Anthropic key, the auth-token pepper, and any device token from ever
+# entering git history. Run as a pre-commit hook (see the note at the bottom of
+# this file) AND in CI. `.env` / `.env.*` are already .gitignored — this is the
+# second line of defense for the case where a key is pasted into a tracked file.
+#
+# Usage:
+#   gitleaks protect --staged --redact --config .gitleaks.toml   # pre-commit
+#   gitleaks detect  --redact --config .gitleaks.toml            # full history / CI
+
+title = "Atlas gitleaks config"
+
+# Pull in gitleaks' large built-in ruleset (AWS, GCP, generic high-entropy, …)
+# and only ADD project-specific rules below, rather than redefining everything.
+[extend]
+useDefault = true
+
+# ─────────────────────────── project-specific rules ───────────────────────────
+
+[[rules]]
+id = "anthropic-api-key"
+description = "Anthropic API key (the ONLY holder is src/server/anthropic/gateway.ts via env — never a committed literal)"
+# Anthropic keys are `sk-ant-...`. Match the prefix plus a long token body.
+regex = '''sk-ant-[A-Za-z0-9_-]{20,}'''
+keywords = ["sk-ant-"]
+
+[[rules]]
+id = "atlas-auth-token-pepper"
+description = "AUTH_TOKEN_PEPPER assigned to a literal value (must live only in /etc/atlas/atlas.env)"
+regex = '''(?i)AUTH_TOKEN_PEPPER\s*[:=]\s*['"]?[A-Za-z0-9_\-+/=]{16,}['"]?'''
+keywords = ["auth_token_pepper"]
+
+[[rules]]
+id = "atlas-anthropic-key-assignment"
+description = "ANTHROPIC_API_KEY assigned to a literal value anywhere in the tree"
+regex = '''(?i)ANTHROPIC_API_KEY\s*[:=]\s*['"]?sk-ant-[A-Za-z0-9_-]{20,}['"]?'''
+keywords = ["anthropic_api_key"]
+
+# ─────────────────────────── allowlist ───────────────────────────
+
+[allowlist]
+description = "Paths/values that are templates or fixtures, not real secrets."
+# The committed env template carries placeholders, not real values.
+paths = [
+  '''\.env\.example$''',
+  '''.*\.lock$''',
+  '''pnpm-lock\.yaml$''',
+]
+# Common placeholder values used in docs/templates.
+regexes = [
+  '''sk-ant-xxxx+''',
+  '''(?i)your[-_]?(anthropic[-_]?)?(api[-_]?)?key[-_]?here''',
+  '''(?i)changeme|placeholder|example|dummy''',
+]
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Pre-commit hook (install once per clone — hooks are NOT committed by git):
+#
+#   1. Install gitleaks:        brew install gitleaks        (or download a binary)
+#   2. Create .git/hooks/pre-commit with:
+#
+#        #!/usr/bin/env bash
+#        set -euo pipefail
+#        if ! command -v gitleaks >/dev/null 2>&1; then
+#          echo "gitleaks not installed — run 'brew install gitleaks'"; exit 1
+#        fi
+#        gitleaks protect --staged --redact --config "$(git rev-parse --show-toplevel)/.gitleaks.toml"
+#
+#   3. chmod +x .git/hooks/pre-commit
+#
+# A failing scan blocks the commit. CI should additionally run:
+#   gitleaks detect --redact --config .gitleaks.toml
+# ──────────────────────────────────────────────────────────────────────────────

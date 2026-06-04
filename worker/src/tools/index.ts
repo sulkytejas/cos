@@ -6,7 +6,7 @@
  * Add a tool by: define schema below, add a handler, register in TOOLS map.
  */
 import { db, schema } from "../db";
-import { and, desc, eq, gte, like } from "drizzle-orm";
+import { and, desc, eq, gte, isNull, like } from "drizzle-orm";
 
 // JSONSchema tool definitions — passed to the Anthropic API.
 export const TOOL_SCHEMAS = [
@@ -150,13 +150,22 @@ function handleChapterQuery(args: ToolArgs) {
   const withDecisions = !!args.with_decisions;
   const withEntries = !!args.with_entries;
 
+  // §4.d: never let the agent see tombstoned rows.
   let rows;
   if (chapterId) {
-    rows = db.select().from(schema.chapters).where(eq(schema.chapters.id, chapterId)).all();
+    rows = db
+      .select()
+      .from(schema.chapters)
+      .where(and(eq(schema.chapters.id, chapterId), isNull(schema.chapters.deletedAt)))
+      .all();
   } else if (status) {
-    rows = db.select().from(schema.chapters).where(eq(schema.chapters.status, status)).all();
+    rows = db
+      .select()
+      .from(schema.chapters)
+      .where(and(eq(schema.chapters.status, status), isNull(schema.chapters.deletedAt)))
+      .all();
   } else {
-    rows = db.select().from(schema.chapters).all();
+    rows = db.select().from(schema.chapters).where(isNull(schema.chapters.deletedAt)).all();
   }
 
   return rows.map((c) => {
@@ -170,20 +179,24 @@ function handleChapterQuery(args: ToolArgs) {
       purpose: c.purpose,
     };
     if (withTodos) {
-      result.todos = db.select().from(schema.todos).where(eq(schema.todos.chapterId, c.id)).all();
+      result.todos = db
+        .select()
+        .from(schema.todos)
+        .where(and(eq(schema.todos.chapterId, c.id), isNull(schema.todos.deletedAt)))
+        .all();
     }
     if (withDecisions) {
       result.decisions = db
         .select()
         .from(schema.decisions)
-        .where(eq(schema.decisions.chapterId, c.id))
+        .where(and(eq(schema.decisions.chapterId, c.id), isNull(schema.decisions.deletedAt)))
         .all();
     }
     if (withEntries) {
       result.entries = db
         .select()
         .from(schema.entries)
-        .where(eq(schema.entries.chapterId, c.id))
+        .where(and(eq(schema.entries.chapterId, c.id), isNull(schema.entries.deletedAt)))
         .orderBy(desc(schema.entries.date))
         .limit(10)
         .all();
@@ -200,7 +213,7 @@ function handleGmailSearch(args: ToolArgs) {
   let rows = db
     .select()
     .from(schema.signals)
-    .where(eq(schema.signals.source, "gmail"))
+    .where(and(eq(schema.signals.source, "gmail"), isNull(schema.signals.deletedAt)))
     .orderBy(desc(schema.signals.arrivedAt))
     .all();
 
@@ -230,7 +243,7 @@ function handleCalendarQuery(args: ToolArgs) {
   const rows = db
     .select()
     .from(schema.signals)
-    .where(eq(schema.signals.source, "calendar"))
+    .where(and(eq(schema.signals.source, "calendar"), isNull(schema.signals.deletedAt)))
     .all();
   const matches = rows.filter((r) => {
     const raw = r.rawData as Record<string, unknown>;
@@ -254,7 +267,7 @@ function handleBriefHistory(args: ToolArgs) {
       createdAt: schema.briefs.createdAt,
     })
     .from(schema.briefs)
-    .where(eq(schema.briefs.chapterId, chapterId))
+    .where(and(eq(schema.briefs.chapterId, chapterId), isNull(schema.briefs.deletedAt)))
     .orderBy(desc(schema.briefs.createdAt))
     .limit(limit)
     .all();
@@ -262,13 +275,13 @@ function handleBriefHistory(args: ToolArgs) {
 
 function handlePersonLookup(args: ToolArgs) {
   const q = ((args.query as string) || "").toLowerCase();
-  const allSignals = db.select().from(schema.signals).all();
+  const allSignals = db.select().from(schema.signals).where(isNull(schema.signals.deletedAt)).all();
   const matches = allSignals.filter((s) => {
     const raw = s.rawData as Record<string, unknown>;
     const text = JSON.stringify(raw).toLowerCase();
     return text.includes(q);
   });
-  const allEntries = db.select().from(schema.entries).all();
+  const allEntries = db.select().from(schema.entries).where(isNull(schema.entries.deletedAt)).all();
   const entryHits = allEntries.filter((e) => e.content.toLowerCase().includes(q));
 
   return {
@@ -297,6 +310,7 @@ function handleNoteToSelf(args: ToolArgs) {
       chapterId: chapterId ?? null,
       description: text,
       prompt: `Re-examine: ${text}`,
+      updatedAt: new Date().toISOString(),
       sourceType: "internal",
       nextCheck: next,
       cadenceMinutes: 60 * 24,

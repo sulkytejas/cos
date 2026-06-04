@@ -1,0 +1,2 @@
+ALTER TABLE `events` ADD `result` text;--> statement-breakpoint
+CREATE UNIQUE INDEX `signals_user_source_external_unq` ON `signals` (`user_id`,`source`,`external_id`) WHERE "signals"."external_id" IS NOT NULL;

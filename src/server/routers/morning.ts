@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { router, publicProcedure } from "../trpc";
+import { and, eq, isNull } from "drizzle-orm";
+import { router, protectedProcedure } from "../trpc";
 import { db } from "@/db/client";
 import { chapters, todos, decisions, entries } from "@/db/schema";
 import { SEEDED_MORNING_PAGE } from "@/lib/morning-page";
@@ -10,7 +11,7 @@ import { randomUUID } from "node:crypto";
  * "Send to chapters" filing action.
  */
 export const morningRouter = router({
-  latest: publicProcedure.query(() => {
+  latest: protectedProcedure.query(() => {
     return SEEDED_MORNING_PAGE;
   }),
 
@@ -19,7 +20,7 @@ export const morningRouter = router({
    * as todos / decisions / journal entries. Returns counts so the UI
    * can render the Filed confirmation.
    */
-  filed: publicProcedure
+  filed: protectedProcedure
     .input(
       z.object({
         sentences: z.array(
@@ -38,8 +39,12 @@ export const morningRouter = router({
         ),
       })
     )
-    .mutation(({ input }) => {
-      const allChapters = db.select({ id: chapters.id, title: chapters.title }).from(chapters).all();
+    .mutation(({ input, ctx }) => {
+      const allChapters = db
+        .select({ id: chapters.id, title: chapters.title })
+        .from(chapters)
+        .where(and(eq(chapters.userId, ctx.userId), isNull(chapters.deletedAt)))
+        .all();
       const findChapterId = (hint: string | null): string | null => {
         if (!hint) return null;
         const match = allChapters.find((c) => c.title.toLowerCase().includes(hint.toLowerCase()));
@@ -47,6 +52,7 @@ export const morningRouter = router({
       };
 
       const counts = { todo: 0, decision: 0, journal: 0 };
+      const now = new Date().toISOString();
 
       for (const s of input.sentences) {
         if (!s.extracts) continue;
@@ -61,9 +67,11 @@ export const morningRouter = router({
           db.insert(todos)
             .values({
               id: randomUUID(),
+              userId: ctx.userId,
               chapterId,
               text: s.text,
               source: "extracted",
+              updatedAt: now,
             })
             .run();
           counts.todo++;
@@ -72,11 +80,13 @@ export const morningRouter = router({
           db.insert(decisions)
             .values({
               id: randomUUID(),
+              userId: ctx.userId,
               chapterId,
               title: s.text.slice(0, 120),
               rationale: s.text,
-              decidedAt: new Date().toISOString(),
+              decidedAt: now,
               source: "extracted",
+              updatedAt: now,
             })
             .run();
           counts.decision++;
@@ -85,10 +95,12 @@ export const morningRouter = router({
           db.insert(entries)
             .values({
               id: randomUUID(),
+              userId: ctx.userId,
               chapterId,
-              date: new Date().toISOString(),
+              date: now,
               content: s.text,
               source: "manual",
+              updatedAt: now,
             })
             .run();
           counts.journal++;

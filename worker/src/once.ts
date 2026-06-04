@@ -1,39 +1,21 @@
 /**
  * Drain the events table once and exit. Used for "pnpm worker:once" to
- * smoke-test or to process backlog before starting the long-running worker.
+ * smoke-test or to process a backlog before starting the long-running worker.
+ *
+ * Goes through the same atomic-claim + transactional-commit path as the
+ * long-running worker (`queue.ts`), so a one-shot drain has identical
+ * output-idempotency and crash-recovery semantics.
  */
-import { db, schema } from "./db";
-import { processEvent } from "./processors/event";
-import { eq } from "drizzle-orm";
+import { recoverOnBoot, drainUntilEmpty } from "./queue";
+import { sqlite_ } from "./db";
 
 async function main() {
   console.log("[worker:once] draining pending events…");
-  while (true) {
-    const next = db
-      .select()
-      .from(schema.events)
-      .where(eq(schema.events.status, "pending"))
-      .limit(1)
-      .all()[0];
-    if (!next) break;
-
-    db.update(schema.events).set({ status: "processing" }).where(eq(schema.events.id, next.id)).run();
-    try {
-      await processEvent(next);
-      db.update(schema.events)
-        .set({ status: "done", processedAt: new Date().toISOString() })
-        .where(eq(schema.events.id, next.id))
-        .run();
-      console.log(`[worker:once] processed ${next.type}`);
-    } catch (err) {
-      db.update(schema.events)
-        .set({ status: "failed", processedAt: new Date().toISOString(), error: (err as Error).message })
-        .where(eq(schema.events.id, next.id))
-        .run();
-      console.error(`[worker:once] failed ${next.type}:`, err);
-    }
-  }
-  console.log("[worker:once] done.");
+  // Reclaim anything a prior crashed run left 'processing' so it drains too.
+  recoverOnBoot();
+  const n = await drainUntilEmpty();
+  console.log(`[worker:once] done — processed ${n} event(s).`);
+  sqlite_.close();
 }
 
 main().catch((err) => {

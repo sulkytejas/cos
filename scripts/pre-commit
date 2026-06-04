@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+#
+# Atlas pre-commit hook (SERVER_ARCHITECTURE.md §4.f).
+#
+# Runs gitleaks against the STAGED changes so a secret (ANTHROPIC_API_KEY,
+# AUTH_TOKEN_PEPPER, a device token, …) can never be committed. Install it with
+# `scripts/install-hooks.sh`, which symlinks this file into .git/hooks/pre-commit
+# (git does not version .git/hooks, so the hook lives here and is installed once
+# per clone).
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "✗ gitleaks is not installed — secret scan cannot run."
+  echo "  Install it (e.g. 'brew install gitleaks') and retry the commit."
+  echo "  To bypass in an emergency: git commit --no-verify  (NOT recommended)."
+  exit 1
+fi
+
+echo "• gitleaks: scanning staged changes for secrets…"
+if ! gitleaks protect --staged --redact --config "${ROOT}/.gitleaks.toml"; then
+  echo "✗ gitleaks found a potential secret in the staged changes — commit blocked."
+  echo "  Remove the secret (move it to /etc/atlas/atlas.env) and re-stage."
+  exit 1
+fi
+
+echo "✓ gitleaks: no secrets detected."

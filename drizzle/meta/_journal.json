@@ -15,6 +15,69 @@
       "when": 1779348511013,
       "tag": "0001_wonderful_loners",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1780424698869,
+      "tag": "0002_friendly_felicia_hardy",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1780425495554,
+      "tag": "0003_zippy_blade",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1780426426978,
+      "tag": "0004_chief_christian_walker",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1780427232987,
+      "tag": "0005_device_tokens",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1780428602018,
+      "tag": "0006_dizzy_random",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1780438372113,
+      "tag": "0007_complex_prima",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1780440587273,
+      "tag": "0008_sync_deltas",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1780442408909,
+      "tag": "0009_connector_oauth",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1780565395123,
+      "tag": "0010_aromatic_colonel_america",
+      "breakpoints": true
     }
   ]
 }

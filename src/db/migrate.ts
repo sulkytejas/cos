@@ -33,9 +33,17 @@ try {
 
 sqlite.close();
 
-import("./seed")
-  .then(({ seedIfEmpty }) => seedIfEmpty())
-  .then(() => import("./seed-v2").then(({ seedV2IfEmpty }) => seedV2IfEmpty()))
-  .catch((err) => {
-    console.error("[atlas] seed failed:", err);
-  });
+// SERVER_ARCHITECTURE.md §4.f (deploy "Split migrate from seed"): the production
+// deploy path runs migrate-ONLY — it must never auto-load demo data into the live
+// DB. Seeding is gated behind `ATLAS_SEED=1` (set only for local dev / a fresh
+// demo box), so `pnpm build && migrate` on the VM applies schema and stops there.
+if (process.env.ATLAS_SEED === "1") {
+  import("./seed")
+    .then(({ seedIfEmpty }) => seedIfEmpty())
+    .then(() => import("./seed-v2").then(({ seedV2IfEmpty }) => seedV2IfEmpty()))
+    .catch((err) => {
+      console.error("[atlas] seed failed:", err);
+    });
+} else {
+  console.log("[atlas] migrate-only (set ATLAS_SEED=1 to also seed demo data)");
+}

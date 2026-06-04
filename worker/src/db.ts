@@ -24,6 +24,15 @@ if (!fs.existsSync(DB_DIR)) {
 const sqlite = new Database(DB_PATH);
 sqlite.pragma("journal_mode = WAL");
 sqlite.pragma("foreign_keys = ON");
+// SERVER_ARCHITECTURE.md §4.c — required: the worker and the Next.js API both
+// contend the WAL; without busy_timeout better-sqlite3 throws SQLITE_BUSY
+// immediately on a writer collision instead of waiting briefly.
+sqlite.pragma("busy_timeout = 5000");
 
 export const db = drizzle(sqlite, { schema });
+// The raw better-sqlite3 handle. The queue needs it for the atomic
+// `UPDATE … RETURNING` claim, `INSERT … ON CONFLICT` enqueue-dedup, and the
+// single-statement recovery txn — patterns Drizzle's query builder doesn't
+// express directly. Reuses the same connection (pragmas, WAL, busy_timeout).
+export const sqlite_ = sqlite;
 export { schema };
