@@ -14,21 +14,47 @@ struct TodayScreen: View {
 
     private let space = "today.scroll"
 
+    /// DEBUG: `--today-demo` forces the seeded demo thread (the design-mock copy)
+    /// so the screen can be pixel-compared against the handout regardless of live data.
+    private var forceDemo: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains("--today-demo")
+        #else
+        false
+        #endif
+    }
+    /// DEBUG: `--today-bottom` opens the thread scrolled to the foot (for shooting
+    /// the bottom of the screen against the mock).
+    private var scrollBottomDebug: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains("--today-bottom")
+        #else
+        false
+        #endif
+    }
+
     var body: some View {
         ZStack(alignment: .bottom) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     DayDivider(label: "while you slept", roman: "02:14 → 06:38")
 
-                    if briefs.isEmpty {
+                    if briefs.isEmpty || forceDemo {
                     AyumiTurn(when: "06:38",
-                              prose: ayumiProse([
-                                .init("I sat with last night while you slept. "),
-                                .init("Karan", .roman),
-                                .init(" moved the intro to "),
-                                .init("14:30", .accent),
-                                .init(" — I pulled the thread and drafted what you'll want to open with."),
-                              ], size: 17),
+                              paragraphs: [
+                                ayumiProse([
+                                    .init("I worked through the night. A note from "),
+                                    .init("Karan", .roman),
+                                    .init(" landed at "),
+                                    .init("03:42", .roman),
+                                    .init(" — I held it."),
+                                ], size: 17),
+                                ayumiProse([
+                                    .init("Drafted you a brief for "),
+                                    .init("14:30", .accent),
+                                    .init(", opened with the cohort, not the round. The portrait sitting tomorrow shifted one block south — folded under your stack."),
+                                ], size: 17),
+                              ],
                               source: "6 sources · email, voice memo, calendar, deck v3") {
                         BriefCapsule(glyph: "K", title: "Karan, in 90 minutes.", when: "14:30",
                                      onOpen: { emitRing(); halo.setState(.delivered) })
@@ -39,18 +65,18 @@ struct TodayScreen: View {
                     AyumiTurn(when: "07:15",
                               thinking: "reading the deck and yesterday's voice memo…")
 
-                    AyumiTurn(when: "08:02",
-                              prose: ayumiProse([
-                                .init("Two things. The "),
+                    AyumiTurn(when: "07:16",
+                              paragraphs: [ayumiProse([
+                                .init("Two small things. Your "),
                                 .init("deck v3", .accent),
-                                .init(" churn slide is stale — "),
+                                .init(" still has the old churn slide — I can swap it for the cohort curve in five minutes if you want. And "),
                                 .init("V.", .roman),
-                                .init(" sent fresher numbers at "),
+                                .init(" emailed about Thursday with a softer studio time, "),
                                 .init("11:30", .accent),
-                                .init(". I can swap it before "),
+                                .init(" instead of "),
                                 .init("11:00", .accent),
-                                .init("."),
-                              ], size: 17),
+                                .init(" — I haven't accepted yet."),
+                              ], size: 17)],
                               source: "3 sources · drive, gmail, calendar") {
                         BriefCapsule(glyph: "S", title: "Swap the churn slide", when: "5 min",
                                      onOpen: { emitRing(); halo.setState(.delivered) })
@@ -58,7 +84,7 @@ struct TodayScreen: View {
                     } else {
                         ForEach(Array(briefs.prefix(4))) { b in
                             AyumiTurn(when: b.when ?? "today",
-                                      prose: ayumiProse([.init(b.preview ?? b.relevance ?? b.situationDescription)], size: 17),
+                                      paragraphs: [ayumiProse([.init(b.preview ?? b.relevance ?? b.situationDescription)], size: 17)],
                                       source: b.drafted) {
                                 BriefCapsule(glyph: String(b.title.prefix(1)).uppercased(),
                                              title: b.title, when: b.when ?? "",
@@ -69,13 +95,19 @@ struct TodayScreen: View {
                     }
 
                     DayDivider(label: "now", roman: "09:41")
-                    Spacer().frame(height: 92)   // clears the global capture cue
+                    Spacer().frame(height: 76)   // CSS .conv bottom inset 60 + padding 16
                 }
                 .padding(.horizontal, 22)
-                .padding(.top, 70)               // clears the app-mark
+                .padding(.top, 60)               // app-mark(pageTop+30) → divider ≈ +38px gap
             }
             .coordinateSpace(name: space)
             .scrollDismissesKeyboard(.interactively)
+            .defaultScrollAnchor(scrollBottomDebug ? .bottom : .top)
+            // The page already sits below the Dynamic Island (PageShell insets it
+            // within the safe area). Without this the ScrollView ADDS the safe-area
+            // inset a second time, pushing the whole thread ~59px down — the "huge"
+            // top gap. Our explicit .padding(.top, 76) now positions content exactly.
+            .ignoresSafeArea(.container, edges: .top)
 
             // v0.7: the bottom compose pill was removed — it was redundant with
             // the global Capture cue (mounted in PageShell). Today now reaches
@@ -102,20 +134,22 @@ struct TodayScreen: View {
 
 private struct AyumiTurn<Embed: View>: View {
     let when: String
-    let prose: Text?
+    var paragraphs: [Text] = []
     var source: String? = nil
     var thinking: String? = nil
     @ViewBuilder var embed: () -> Embed
 
-    init(when: String, prose: Text? = nil, source: String? = nil, thinking: String? = nil,
+    init(when: String, paragraphs: [Text] = [], source: String? = nil, thinking: String? = nil,
          @ViewBuilder embed: @escaping () -> Embed = { EmptyView() }) {
-        self.when = when; self.prose = prose; self.source = source
+        self.when = when; self.paragraphs = paragraphs; self.source = source
         self.thinking = thinking; self.embed = embed
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            // thread line + avatar
+        // CSS: `.turn { padding: 10px 0 14px 18px }` — 18px left gutter = the
+        // 12px avatar/thread column + 6px spacing.
+        HStack(alignment: .top, spacing: 6) {
+            // thread line + avatar (CSS: 1px line, teal-deep→rule, opacity .7)
             VStack(spacing: 6) {
                 AyumiAvatar(size: 12)
                 Rectangle()
@@ -133,10 +167,14 @@ private struct AyumiTurn<Embed: View>: View {
                 }
                 .padding(.bottom, 8)   // .turn-meta { margin-bottom: 8px }
 
-                if let prose {
-                    prose
-                        .lineSpacing(5)
-                        .fixedSize(horizontal: false, vertical: true)
+                // CSS: `.body { font-size:17px; line-height:1.46 }`, paragraphs
+                // separated by `p + p { margin-top: 8px }` (NOT a blank line).
+                if !paragraphs.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(Array(paragraphs.enumerated()), id: \.offset) { _, p in
+                            p.lineSpacing(4).fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
                 }
 
                 // The thinking line sits in the prose column (green-dot bullet),
@@ -147,13 +185,13 @@ private struct AyumiTurn<Embed: View>: View {
 
                 if let source {
                     Text(source)
-                        .font(Theme.Font.mono(9))
+                        .font(Theme.Font.mono(9.5))
                         .tracking(0.5)
                         .foregroundStyle(Theme.Palette.ink4)
-                        .padding(.top, 8)
+                        .padding(.top, 8)   // .src-tag { margin-top: 8px }
                 }
 
-                embed().padding(.top, 12)
+                embed().padding(.top, 12)   // .ssatom { margin-top: 12px }
             }
         }
         .padding(.top, 10)
@@ -201,7 +239,7 @@ private struct UserTurn: View {
                 Text("YOU").font(Theme.Font.mono(9.5)).tracking(1.5).foregroundStyle(Theme.Palette.ink3)
             }
             Text(text)
-                .font(Theme.Font.sans(14.5))
+                .font(Theme.Font.sans(15.5))
                 .foregroundStyle(.white)
                 .lineSpacing(3)
                 .padding(.horizontal, 14)
@@ -211,7 +249,7 @@ private struct UserTurn: View {
                                            bottomTrailingRadius: 4, topTrailingRadius: 18, style: .continuous)
                         .fill(Theme.Palette.ink)
                 )
-                .frame(maxWidth: 280, alignment: .trailing)
+                .frame(maxWidth: 248, alignment: .trailing)
                 .shadow1()
         }
         .frame(maxWidth: .infinity, alignment: .trailing)

@@ -1,5 +1,12 @@
 import SwiftUI
 
+/// Live date for the Today app-mark crumb (e.g. "Jun 4"), evaluated once at launch.
+/// File-scope because PageShell is generic (no static stored properties allowed).
+private let todayDateCrumb: String = {
+    let f = DateFormatter(); f.dateFormat = "MMM d"
+    return f.string(from: Date())
+}()
+
 /// The shared shell every Ayumi screen sits in: a full-bleed Halo behind an
 /// opaque paper page surface inset 22pt (radius 32), with the app-mark, edge
 /// chevrons, the logo-menu index sheet, and horizontal-swipe navigation.
@@ -49,11 +56,15 @@ struct PageShell<Content: View>: View {
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            // App-mark — top-left of the page.
-            AppMark(screen: router.current.title) {
+            // App-mark — top-left of the page. Today carries a teal date crumb
+            // ("Ayumi · Today · Jun 4") like the mock; other screens omit it.
+            AppMark(screen: router.current.title,
+                    date: router.current == .today ? todayDateCrumb : "") {
                 withAnimation(Theme.Motion.overshoot()) { showIndex = true }
             }
-            .padding(.top, 30)
+            // CSS `.app-mark { top: 30px; left: 22px }` — measured INSIDE the page,
+            // which is itself inset by haloInset (22). So both offsets add the inset.
+            .padding(.top, Theme.Layout.haloInset + 30)
             .padding(.leading, Theme.Layout.haloInset + Theme.Layout.screenPad)
 
             // Logo-menu index sheet.
