@@ -15,11 +15,21 @@ enum AppContainer {
         Proposal.self,
         Signal.self,
         AppEvent.self,
+        // v0.6 Phase 4 — delta-sync bookkeeping (SERVER_ARCHITECTURE.md §4.d/§4.e):
+        // durable per-table cursor, write-through outbox queue, one-way
+        // bootstrap latch. Kept in the SAME store as the mirror.
+        SyncCursor.self,
+        OutboxItem.self,
+        SyncMigration.self,
     ])
 
     static func make() -> ModelContainer {
+        // The store name is chosen by the DataSource flag: `.server` uses the
+        // "atlas" cache mirror; the developer-only `.local` fallback uses a
+        // SEPARATE "atlas-local" store so the two engines never alias one store
+        // (the split-brain guard, SERVER_ARCHITECTURE.md §4.d).
         let config = ModelConfiguration(
-            "atlas",
+            DataSource.current.storeName,
             schema: schema,
             isStoredInMemoryOnly: false
         )

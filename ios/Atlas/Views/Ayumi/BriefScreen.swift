@@ -7,6 +7,7 @@ import SwiftData
 struct BriefScreen: View {
     @Environment(HaloController.self) private var halo
     @Environment(\.modelContext) private var context
+    @Environment(AtlasRepo.self) private var repo
 
     /// Most-recent surfaced Brief, if any. Empty → hardcoded fallback below.
     @Query(filter: #Predicate<Brief> { $0.statusRaw == "surfaced" },
@@ -53,7 +54,11 @@ struct BriefScreen: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     framing
-                    Text(liveBrief.map { $0.title + "." } ?? "Karan Mehta.")
+                    // The 46pt slot is a subject/name, not a sentence. Use the
+                    // brief's person name when it carries one; otherwise this is
+                    // the static demo, so show the demo subject (matches the mock)
+                    // rather than a live digest title like "Handled while you slept."
+                    Text((personData?.name).map { $0 + "." } ?? "Karan Mehta.")
                         .font(Theme.Font.serifItalic(46))
                         .foregroundStyle(Theme.Palette.ink)
                         .tracking(-0.9)
@@ -284,6 +289,7 @@ struct BriefScreen: View {
                 Button {
                     emitRing(); halo.setState(.delivered)
                     withAnimation(Theme.Motion.standard(0.22)) { started = true }
+                    act(.start)   // server flips status + emits brief_acted_on (§4.a)
                 } label: {
                     Text(started ? "Meeting started" : "Start the meeting")
                         .font(Theme.Font.serif(17)).foregroundStyle(.white)
@@ -291,7 +297,7 @@ struct BriefScreen: View {
                         .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(started ? Theme.Palette.forest : Theme.Palette.ink))
                 }
                 .buttonStyle(.plain)
-                Button {} label: {
+                Button { act(.snooze) } label: {
                     Text("Snooze").font(Theme.Font.serif(15)).foregroundStyle(Theme.Palette.ink)
                         .padding(.horizontal, 16).padding(.vertical, 14)
                         .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Theme.Palette.paperDeep)
@@ -302,6 +308,15 @@ struct BriefScreen: View {
             .padding(.horizontal, 22).padding(.bottom, 12)
             .background(Theme.Palette.paper)
         }
+    }
+
+    // ─── Brief actions (Start / Snooze) ───────────────────────────
+    /// Act on the live brief through the repo: optimistic-local status flip +
+    /// write-through (server flips status AND emits `brief_acted_on`, §4.a).
+    /// No-op for the static demo brief (no server row to act on).
+    private func act(_ action: BriefAction) {
+        guard let id = liveBrief?.id else { return }
+        Task { try? await repo.actOnBrief(id, action: action) }
     }
 
     // ─── Receipts ─────────────────────────────────────────────────

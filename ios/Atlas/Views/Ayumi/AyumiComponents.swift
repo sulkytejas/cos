@@ -23,8 +23,13 @@ func ayumiProse(_ runs: [ProseRun], size: CGFloat, color: Color = Theme.Palette.
         case .italic: a.font = .custom(Theme.Typeface.serifItalic, size: size)
         case .roman:  a.font = .custom(Theme.Typeface.serifRegular, size: size)
         case .accent:
+            // The mock's `em.accent` is a teal highlighter *band* anchored to the
+            // bottom of the line (gradient transparent→0.16 teal across the lower
+            // ~28%), not a full-height box. SwiftUI can't draw a partial-height
+            // inline background, so render the bottom-anchored intent as a teal
+            // underline-marker (roman glyphs sitting over a teal baseline stroke).
             a.font = .custom(Theme.Typeface.serifRegular, size: size)
-            a.backgroundColor = Theme.Palette.teal.opacity(0.16)
+            a.underlineStyle = Text.LineStyle(pattern: .solid, color: Theme.Palette.teal.opacity(0.5))
         }
         a.foregroundColor = color
         out += a

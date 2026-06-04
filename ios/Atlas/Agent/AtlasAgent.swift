@@ -2,242 +2,39 @@ import Foundation
 import SwiftData
 import os
 
-/// AtlasAgent — the in-app worker the v0.2 brief specified. Runs an event
-/// loop while the app is foreground (and via BGTaskScheduler in the
-/// background), draining the `AppEvent` queue, polling watchers + connectors,
-/// and writing Briefs / Proposals back through SwiftData.
+/// AtlasAgent — NEUTRALIZED (SERVER_ARCHITECTURE.md §4.e).
 ///
-/// Unlike the original brief's Node worker, this lives in the iOS app — same
-/// data, same agent loop, same tools, just hosted inside the app process so
-/// we don't need a server.
+/// The in-app agent loop (event drain + watcher/connector polling + on-device
+/// model runs) has been moved to the SERVER worker behind one throttled AI
+/// gateway. iOS is now a thin client: `AtlasRepo` (the single SwiftData writer)
+/// submits captures/asks/approvals to the server and mirrors server rows into
+/// the cache for the `@Query` reads. There is no on-device agent loop, no
+/// `AppEvent` drain, and no provider call from the device.
+///
+/// This type is retained only so the legacy v0.3 surface (not the shipping
+/// Ayumi UI) still compiles. `attach` / `tickOnce` / `startForegroundLoop` /
+/// `stopForegroundLoop` are no-ops; the status fields are inert. Nothing here
+/// touches the network or runs a model.
 actor AtlasAgent {
     static let shared = AtlasAgent()
 
     private let log = Logger(subsystem: "com.atlas.app", category: "AtlasAgent")
-    private var container: ModelContainer?
-    private var loopTask: Task<Void, Never>?
     private(set) var lastTickAt: Date?
     private(set) var lastError: String?
     private(set) var pendingEventCount: Int = 0
-    private(set) var lastWatcherCheckAt: Date?
-    private(set) var lastConnectorPollAt: Date?
-    /// Stamp of the most-recent dailyScan we enqueued (`"YYYY-M-D"`). Avoids
-    /// re-fetching the whole AppEvent table on every 6am tick.
-    private var lastDailyScanStamp: String?
-    /// Tick counter so we GC done events on a slow cadence (every ~50 ticks =
-    /// ~25 minutes of foreground time).
-    private var tickCounter: Int = 0
 
-    func attach(container: ModelContainer) {
-        self.container = container
-        // Stuck-event recovery: if the app crashed mid-handler last run, any
-        // AppEvent left in `.processing` will otherwise be orphaned. Reset
-        // them to `.pending` so the next drain picks them up.
-        recoverStuckEvents()
-    }
+    /// No-op — the brain runs on the server now. Kept for legacy call sites.
+    func attach(container: ModelContainer) {}
 
-    private func recoverStuckEvents() {
-        guard let container else { return }
-        let ctx = ModelContext(container)
-        let processingRaw = EventStatus.processing.rawValue
-        let stuck = (try? ctx.fetch(FetchDescriptor<AppEvent>(
-            predicate: #Predicate { $0.statusRaw == processingRaw }
-        ))) ?? []
-        for evt in stuck {
-            evt.status = .pending
-            evt.error = "recovered from .processing on launch"
-        }
-        if !stuck.isEmpty {
-            try? ctx.save()
-            log.info("recovered \(stuck.count) stuck events")
-        }
-    }
+    /// No-op — there is no on-device event loop. Kept for legacy call sites.
+    func startForegroundLoop() {}
 
-    /// Start the foreground loop. Idempotent — calling twice is a no-op.
-    func startForegroundLoop() {
-        guard loopTask == nil else { return }
-        log.info("starting foreground loop")
-        loopTask = Task { [weak self] in
-            await self?.runLoopUntilCancelled()
-        }
-    }
+    /// No-op — there is no on-device event loop. Kept for legacy call sites.
+    func stopForegroundLoop() {}
 
-    func stopForegroundLoop() {
-        loopTask?.cancel()
-        loopTask = nil
-        log.info("stopped foreground loop")
-    }
-
-    /// One agent pass — event drain + watcher check + connector poll.
-    /// Used by both the foreground loop and the background refresh task.
-    func tickOnce() async {
-        guard let container else {
-            log.error("tickOnce: no container attached")
-            return
-        }
-        lastTickAt = Date()
-        tickCounter &+= 1
-        do {
-            let workCtx = ModelContext(container)
-            try await drainPendingEvents(in: workCtx)
-            try await checkDueWatchers(in: workCtx)
-            try await maybePollConnectors(in: workCtx)
-            try await maybeRunTimeTriggers(in: workCtx)
-            if tickCounter % 50 == 0 {
-                gcOldEvents(in: workCtx)
-            }
-            lastError = nil
-        } catch {
-            lastError = String(describing: error)
-            log.error("tick failed: \(error.localizedDescription, privacy: .public)")
-        }
-    }
-
-    /// Sweep done/failed events older than 30 days. Runs on a slow cadence.
-    private func gcOldEvents(in ctx: ModelContext) {
-        let cutoff = Date().addingTimeInterval(-30 * 24 * 60 * 60)
-        let doneRaw = EventStatus.done.rawValue
-        let failedRaw = EventStatus.failed.rawValue
-        let old = (try? ctx.fetch(FetchDescriptor<AppEvent>(
-            predicate: #Predicate {
-                ($0.statusRaw == doneRaw || $0.statusRaw == failedRaw)
-                    && $0.createdAt < cutoff
-            }
-        ))) ?? []
-        for evt in old { ctx.delete(evt) }
-        if !old.isEmpty {
-            try? ctx.save()
-            log.info("gc'd \(old.count) old events")
-        }
-    }
-
-    // MARK: - Foreground loop
-
-    private func runLoopUntilCancelled() async {
-        while !Task.isCancelled {
-            await tickOnce()
-            // Sleep 30s between passes — same cadence as the v0.2 worker spec.
-            try? await Task.sleep(nanoseconds: 30 * 1_000_000_000)
-        }
-    }
-
-    // MARK: - Pending event drain
-
-    private func drainPendingEvents(in ctx: ModelContext) async throws {
-        let pendingRaw = EventStatus.pending.rawValue
-        let captureRaw = EventType.captureReceived.rawValue
-        let cap = 2   // soft cap per tick (keeps under the org input-token/min rate limit)
-
-        // User captures jump the queue ahead of background events (watchers, scans).
-        var capDesc = FetchDescriptor<AppEvent>(
-            predicate: #Predicate { $0.statusRaw == pendingRaw && $0.typeRaw == captureRaw },
-            sortBy: [SortDescriptor(\.createdAt, order: .forward)]
-        )
-        capDesc.fetchLimit = cap
-        let captures = try ctx.fetch(capDesc)
-
-        var rest: [AppEvent] = []
-        if captures.count < cap {
-            var restDesc = FetchDescriptor<AppEvent>(
-                predicate: #Predicate { $0.statusRaw == pendingRaw && $0.typeRaw != captureRaw },
-                sortBy: [SortDescriptor(\.createdAt, order: .forward)]
-            )
-            restDesc.fetchLimit = cap - captures.count
-            rest = try ctx.fetch(restDesc)
-        }
-        let pending = captures + rest
-        pendingEventCount = (try? ctx.fetchCount(
-            FetchDescriptor<AppEvent>(predicate: #Predicate { $0.statusRaw == pendingRaw })
-        )) ?? pending.count
-
-        for event in pending {
-            event.status = .processing
-            do { try ctx.save() } catch { log.error("save .processing failed: \(error.localizedDescription, privacy: .public)") }
-            do {
-                try await EventDispatcher.handle(event: event, ctx: ctx, agent: self)
-                event.status = .done
-                event.processedAt = Date()
-                event.error = nil
-            } catch {
-                event.status = .failed
-                event.processedAt = Date()
-                event.error = String(describing: error)
-                log.error("event \(event.id.uuidString, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
-            }
-            // Final-status save: throw on failure so the outer tick catches it
-            // and surfaces in lastError. Better than silent loss of done/failed.
-            try ctx.save()
-        }
-    }
-
-    // MARK: - Watcher cadence
-
-    private func checkDueWatchers(in ctx: ModelContext) async throws {
-        let activeRaw = WatcherStatus.active.rawValue
-        let now = Date()
-        let due = try ctx.fetch(FetchDescriptor<Watcher>(
-            predicate: #Predicate { $0.statusRaw == activeRaw && $0.nextCheck <= now }
-        ))
-        lastWatcherCheckAt = now
-        for watcher in due {
-            // Enqueue a watcher_due event instead of doing the work inline —
-            // keeps the loop uniform (everything flows through events).
-            // We only advance nextCheck here (so the watcher doesn't refire
-            // every tick); lastChecked is set by WatcherDueHandler on success.
-            let payload = WatcherDuePayload(watcherID: watcher.id)
-            ctx.insert(AppEvent(type: .watcherDue, payload: payload))
-            watcher.nextCheck = now.addingTimeInterval(TimeInterval(watcher.cadenceMinutes * 60))
-        }
-        if !due.isEmpty { try? ctx.save() }
-    }
-
-    // MARK: - Connector cadence
-
-    private func maybePollConnectors(in ctx: ModelContext) async throws {
-        let now = Date()
-        if let last = lastConnectorPollAt, now.timeIntervalSince(last) < 15 * 60 {
-            return
-        }
-        lastConnectorPollAt = now
-        ConnectorRunner.pollOnce(in: ctx)
-    }
-
-    // MARK: - Time triggers (daily scan, weekly drift)
-
-    private func maybeRunTimeTriggers(in ctx: ModelContext) async throws {
-        let now = Date()
-        var cal = Calendar(identifier: .gregorian)
-        cal.timeZone = TimeZone(identifier: "Asia/Kolkata") ?? .current
-        let comps = cal.dateComponents([.year, .month, .day, .hour, .weekday], from: now)
-        // Fire on the first foreground tick after ~5am local each day. The old
-        // `hour == 6` gate almost never matched a foregrounded app, so the
-        // "while you slept" digest never generated. The per-day stamp below
-        // still guarantees it runs at most once per day.
-        guard let hour = comps.hour, hour >= 5 else { return }
-
-        let stamp = "\(comps.year ?? 0)-\(comps.month ?? 0)-\(comps.day ?? 0)"
-        // Fast path — if we enqueued today's scan during this app session,
-        // skip without hitting SwiftData at all. Cheap idempotency.
-        if lastDailyScanStamp == stamp { return }
-
-        // Slow path on the first 6am tick after launch: confirm via DB so a
-        // restart inside the 6am window doesn't double-enqueue.
-        let dailyRaw = EventType.dailyScan.rawValue
-        let existing = try ctx.fetch(FetchDescriptor<AppEvent>(
-            predicate: #Predicate { $0.typeRaw == dailyRaw }
-        ))
-        let already = existing.contains {
-            (try? JSONDecoder().decode(DailyScanPayload.self, from: $0.payloadJSON))?.dayStamp == stamp
-        }
-        if !already {
-            ctx.insert(AppEvent(type: .dailyScan, payload: DailyScanPayload(
-                dayStamp: stamp,
-                forwardDrift: (comps.weekday == 1)   // Sunday in IST
-            )))
-            try? ctx.save()
-        }
-        lastDailyScanStamp = stamp
-    }
+    /// No-op — capture/ask/approve now round-trip through `AtlasRepo` →
+    /// `AtlasAPI` → the server gateway, not an on-device tick.
+    func tickOnce() async {}
 }
 
 // MARK: - Event payloads

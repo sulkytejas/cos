@@ -1,11 +1,12 @@
 import SwiftUI
 import Observation
 
-/// The six surfaces, as a wrapping ring: Today → Brief → Capture → Chapters →
-/// Review → Search → (Today). There is no tab bar — movement is via the
-/// logo-menu index sheet, edge chevrons, and horizontal swipe.
+/// The five surfaces, as a wrapping ring: Today → Brief → Chapters → Review →
+/// Search → (Today). There is no tab bar — movement is via the logo-menu index
+/// sheet, edge chevrons, and horizontal swipe. Capture is NOT a destination
+/// (v0.7): it is Ayumi, summoned in place via the global cue on every screen.
 enum AyumiPage: Int, CaseIterable, Identifiable, Hashable {
-    case today, brief, capture, chapters, review, search
+    case today, brief, chapters, review, search
     var id: Int { rawValue }
 
     /// App-mark crumb + index-sheet name.
@@ -13,7 +14,6 @@ enum AyumiPage: Int, CaseIterable, Identifiable, Hashable {
         switch self {
         case .today: "Today"
         case .brief: "Brief"
-        case .capture: "Capture"
         case .chapters: "Chapters"
         case .review: "Review"
         case .search: "Search"
@@ -25,10 +25,19 @@ enum AyumiPage: Int, CaseIterable, Identifiable, Hashable {
         switch self {
         case .today: "the thread"
         case .brief: "Karan · 14:30"
-        case .capture: "what did you notice"
         case .chapters: "5 threads"
         case .review: "4 overnight"
         case .search: "everything"
+        }
+    }
+
+    /// Height of any host bottom action/compose bar the global capture cue must
+    /// lift above (README §"Avoid bottom bars"). 0 ⇒ the cue sits at the foot
+    /// with its paper gradient. Brief carries a sticky "Start the meeting" bar.
+    var captureAvoidInset: CGFloat {
+        switch self {
+        case .brief: 64    // the sticky actionZone
+        default: 0
         }
     }
 

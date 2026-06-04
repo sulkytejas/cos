@@ -10,11 +10,7 @@ struct TodayScreen: View {
     @Environment(NavRouter.self) private var router
     @Query(filter: #Predicate<Brief> { $0.statusRaw == "surfaced" },
            sort: \.surfaceAt, order: .reverse) private var briefs: [Brief]
-    @State private var draft = ""
-    @State private var composeOpen = false
-    @State private var userTurns: [String] = []
     @State private var rings: [EORingItem] = []
-    @FocusState private var composeFocused: Bool
 
     private let space = "today.scroll"
 
@@ -40,7 +36,8 @@ struct TodayScreen: View {
 
                     UserTurn(text: "thanks — anything else I should know before the call?", when: "07:15")
 
-                    ThinkingTurn(text: "reading the deck and yesterday's voice memo…")
+                    AyumiTurn(when: "07:15",
+                              thinking: "reading the deck and yesterday's voice memo…")
 
                     AyumiTurn(when: "08:02",
                               prose: ayumiProse([
@@ -71,13 +68,8 @@ struct TodayScreen: View {
                         }
                     }
 
-                    ForEach(Array(userTurns.enumerated()), id: \.offset) { _, t in
-                        UserTurn(text: t, when: "now")
-                            .transition(.opacity.combined(with: .offset(y: 6)))
-                    }
-
                     DayDivider(label: "now", roman: "09:41")
-                    Spacer().frame(height: 120)   // clears the compose bar
+                    Spacer().frame(height: 92)   // clears the global capture cue
                 }
                 .padding(.horizontal, 22)
                 .padding(.top, 70)               // clears the app-mark
@@ -85,98 +77,17 @@ struct TodayScreen: View {
             .coordinateSpace(name: space)
             .scrollDismissesKeyboard(.interactively)
 
-            composeBar
+            // v0.7: the bottom compose pill was removed — it was redundant with
+            // the global Capture cue (mounted in PageShell). Today now reaches
+            // Ayumi the same way every other screen does: summon in place.
             EOLayer(rings: rings)
         }
     }
 
-    // ─── Compose ──────────────────────────────────────────────────
-    private var composeBar: some View {
-        VStack(spacing: 0) {
-            LinearGradient(colors: [Theme.Palette.paper.opacity(0), Theme.Palette.paper],
-                           startPoint: .top, endPoint: .bottom)
-                .frame(height: 28)
-                .allowsHitTesting(false)
-            HStack(alignment: .bottom, spacing: 8) {
-                Group {
-                    if composeOpen {
-                        TextField("What's on your mind?", text: $draft, axis: .vertical)
-                            .font(Theme.Font.serifItalic(16))
-                            .foregroundStyle(Theme.Palette.ink)
-                            .focused($composeFocused)
-                            .lineLimit(1...6)
-                            .submitLabel(.send)
-                            .onSubmit(send)
-                    } else {
-                        Text("Capture, ask, or note…")
-                            .font(Theme.Font.serifItalic(15))
-                            .foregroundStyle(Theme.Palette.inkFaint)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                withAnimation(Theme.Motion.overshoot(0.42)) { composeOpen = true }
-                                composeFocused = true
-                            }
-                    }
-                }
-                .padding(.leading, 18)
-                .padding(.vertical, 8)
-
-                Button(action: composeOpen ? send : { composeOpen = true; composeFocused = true }) {
-                    Image(systemName: composeOpen ? "arrow.up" : "mic.fill")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .frame(width: 36, height: 36)
-                        .background(Circle().fill(composeOpen ? Theme.Palette.forest : Theme.Palette.ink))
-                }
-                .buttonStyle(.plain)
-                .padding(6)
-            }
-            .frame(minHeight: 52, alignment: composeOpen ? .bottom : .center)
-            .background(
-                RoundedRectangle(cornerRadius: composeOpen ? 18 : 26, style: .continuous)
-                    .fill(Theme.Palette.card)
-                    .overlay(RoundedRectangle(cornerRadius: composeOpen ? 18 : 26, style: .continuous)
-                        .stroke(Theme.Palette.rule, lineWidth: 1))
-            )
-            .shadow1()
-            .padding(.horizontal, 22)
-            .padding(.bottom, 10)
-            .background(Theme.Palette.paper)
-        }
-    }
-
-    private func send() {
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else {
-            withAnimation(Theme.Motion.standard()) { composeOpen = false }
-            return
-        }
-        withAnimation(Theme.Motion.overshoot(0.4)) {
-            userTurns.append(text)
-            draft = ""
-            composeOpen = false
-        }
-        composeFocused = false
-        emitRing()
-        halo.setState(.thinking)
-
-        // Hand the message to the agent loop (a capture the agent reasons over).
-        let payload = CapturePayload(text: text, kind: "auto", chapterID: nil)
-        let event = AppEvent(type: .captureReceived, payload: payload)
-        context.insert(event)
-        try? context.save()
-        let eventID = event.id
-        Task { await AtlasAgent.shared.tickOnce() }
-        Task { @MainActor in
-            for _ in 0..<90 {
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
-                let evt = (try? context.fetch(FetchDescriptor<AppEvent>()))?.first { $0.id == eventID }
-                if let evt, evt.status == .done || evt.status == .failed { halo.setState(.delivered); return }
-            }
-            halo.setState(.delivered)
-        }
-    }
+    // ─── Capture ──────────────────────────────────────────────────
+    // The bottom compose pill was retired in v0.7. Capturing a thought is now
+    // global: summon Ayumi in place from the cue at the foot of every screen
+    // (PageShell → CaptureHost). This screen keeps only its reading thread.
 
     private func emitRing() {
         let item = EORingItem(point: CGPoint(x: 200, y: 560))
@@ -191,12 +102,15 @@ struct TodayScreen: View {
 
 private struct AyumiTurn<Embed: View>: View {
     let when: String
-    let prose: Text
+    let prose: Text?
     var source: String? = nil
+    var thinking: String? = nil
     @ViewBuilder var embed: () -> Embed
 
-    init(when: String, prose: Text, source: String? = nil, @ViewBuilder embed: @escaping () -> Embed = { EmptyView() }) {
-        self.when = when; self.prose = prose; self.source = source; self.embed = embed
+    init(when: String, prose: Text? = nil, source: String? = nil, thinking: String? = nil,
+         @ViewBuilder embed: @escaping () -> Embed = { EmptyView() }) {
+        self.when = when; self.prose = prose; self.source = source
+        self.thinking = thinking; self.embed = embed
     }
 
     var body: some View {
@@ -217,11 +131,19 @@ private struct AyumiTurn<Embed: View>: View {
                     Text("Ayumi").font(Theme.Font.serifItalic(14)).foregroundStyle(Theme.Palette.ink)
                     Text(when).font(Theme.Font.mono(9.5)).tracking(0.6).foregroundStyle(Theme.Palette.ink3)
                 }
-                .padding(.bottom, 6)
+                .padding(.bottom, 8)   // .turn-meta { margin-bottom: 8px }
 
-                prose
-                    .lineSpacing(5)
-                    .fixedSize(horizontal: false, vertical: true)
+                if let prose {
+                    prose
+                        .lineSpacing(5)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                // The thinking line sits in the prose column (green-dot bullet),
+                // not at content-left — it reads as Ayumi reasoning aloud.
+                if let thinking {
+                    ThinkingLine(text: thinking)
+                }
 
                 if let source {
                     Text(source)
@@ -239,18 +161,21 @@ private struct AyumiTurn<Embed: View>: View {
     }
 }
 
-private struct ThinkingTurn: View {
+/// The green-dot "thinking" bullet. Rendered inside an `AyumiTurn` prose column
+/// (the avatar/thread gutter + "Ayumi 07:15" header come from the parent), so the
+/// dot sits indented under the prose — matching the mock — not at content-left.
+private struct ThinkingLine: View {
     let text: String
     @State private var on = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
             Circle()
                 .fill(Theme.Palette.jade)
                 .frame(width: 7, height: 7)
                 .scaleEffect(on ? 1.18 : 1.0)
                 .opacity(on ? 1 : 0.55)
-                .padding(.leading, 14)
+                .alignmentGuide(.firstTextBaseline) { d in d[.bottom] - 1 }
             Text(text)
                 .font(Theme.Font.serifItalic(14.5))
                 .foregroundStyle(Theme.Palette.ink2)
@@ -305,39 +230,29 @@ private struct BriefCapsule: View {
     @State private var open = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 10) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 4, style: .continuous).fill(Theme.Palette.ink)
-                    Circle().fill(RadialGradient(colors: [Theme.Palette.avatarInk.opacity(0.55), .clear],
-                                                 center: UnitPoint(x: 0.3, y: 0.3), startRadius: 0, endRadius: 10))
-                    Text(glyph).font(Theme.Font.serifItalic(11)).foregroundStyle(.white)
-                }
-                .frame(width: 18, height: 18)
-
-                Text(title).font(Theme.Font.serifItalic(15)).foregroundStyle(Theme.Palette.ink).lineLimit(1)
-                Spacer(minLength: 8)
-                Text(when).font(Theme.Font.mono(9.5)).tracking(0.4).foregroundStyle(Theme.Palette.tealDeep)
-                Image(systemName: open ? "chevron.up" : "chevron.down")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(Theme.Palette.ink4)
-            }
-            .padding(.vertical, 9)
-            .padding(.leading, 14)
-            .padding(.trailing, 14)
-
+        Group {
             if open {
-                letter
-                    .transition(.opacity)
+                VStack(alignment: .leading, spacing: 0) {
+                    headerRow(stretch: true)
+                    letter.transition(.opacity)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                // Collapsed: hug short titles (like the mock), but never exceed the
+                // thread column. A long live title caps to the available width and
+                // truncates instead of forcing the whole screen wider — that
+                // intrinsic overflow is what was centering/clipping all of Today.
+                ViewThatFits(in: .horizontal) {
+                    headerRow(stretch: false)
+                    headerRow(stretch: true).frame(maxWidth: .infinity)
+                }
             }
         }
-        .frame(maxWidth: open ? .infinity : nil, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: open ? 10 : 999, style: .continuous).fill(Theme.Palette.card)
+            RoundedRectangle(cornerRadius: open ? 8 : 999, style: .continuous).fill(Theme.Palette.card)
         )
-        .clipShape(RoundedRectangle(cornerRadius: open ? 10 : 999, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: open ? 8 : 999, style: .continuous))
         .shadow1()
-        .fixedSize(horizontal: !open, vertical: false)
         .contentShape(Rectangle())
         .onTapGesture {
             withAnimation(Theme.Motion.overshootStrong(0.55)) { open.toggle() }
@@ -345,20 +260,72 @@ private struct BriefCapsule: View {
         }
     }
 
+    /// The pill / letter head row. `stretch` pushes time+chevron to the far edge
+    /// (used when the capsule fills its column); otherwise the row hugs content.
+    private func headerRow(stretch: Bool) -> some View {
+        let meta = Self.shortWhen(when)
+        // The cap-glyph is a plain obsidian square with a single catchlight —
+        // no initial inside (matches the mock). The `glyph` argument is kept on
+        // the API for callers but is intentionally not rendered here.
+        return HStack(spacing: 10) {
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .fill(Theme.Palette.ink)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(RadialGradient(colors: [Theme.Palette.avatarInk.opacity(0.55), .clear],
+                                             center: UnitPoint(x: 0.3, y: 0.25), startRadius: 0, endRadius: 11))
+                )
+                .frame(width: 18, height: 18)
+
+            // Title fills (and truncates) when the capsule stretches; the short
+            // time meta keeps its intrinsic width so it always stays readable.
+            Text(title).font(Theme.Font.serifItalic(15)).foregroundStyle(Theme.Palette.ink)
+                .lineLimit(1).truncationMode(.tail)
+                .frame(maxWidth: stretch ? .infinity : nil, alignment: .leading)
+            if !stretch { Spacer().frame(width: 12) }
+            if !meta.isEmpty {
+                Text(meta).font(Theme.Font.mono(9.5)).tracking(0.4).foregroundStyle(Theme.Palette.tealDeep)
+                    .lineLimit(1).fixedSize()
+            }
+        }
+        // Capsule: padding 8px 12px 8px 16px (the mock hugs its content and
+        // shows no chevron — open is signalled by the letter unfurling).
+        .padding(.vertical, 8)
+        .padding(.leading, 16)
+        .padding(.trailing, 12)
+    }
+
+    /// The live `when` is "today · X"; everything is "today", so drop that
+    /// redundant prefix and keep the meaningful tail (a time or short label) so
+    /// the title gets the room — matching the mock's short trailing time.
+    static func shortWhen(_ s: String) -> String {
+        var t = s.trimmingCharacters(in: .whitespaces)
+        let lower = t.lowercased()
+        for p in ["today · ", "today·", "today - ", "today "] where lower.hasPrefix(p) {
+            t = String(t.dropFirst(p.count)); break
+        }
+        return t.lowercased() == "today" ? "" : t.trimmingCharacters(in: .whitespaces)
+    }
+
     private var letter: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Rectangle().fill(Theme.Palette.ruleSoft).frame(height: 1)
+            Rectangle().fill(Theme.Palette.rule).frame(height: 1)   // border-top 1px
             label("Person")
-            row("Karan Mehta — VP Product. You met at the Lightspeed dinner; he runs the retention pod.")
+            row("Karan Mehta · Partner at Sequoia · led your A round in '22. He runs late — plan for 20 minutes, not 30.")
             label("Likely to come up")
-            confRow(0.94, "Whether m6 cohort retention held after the pricing change.")
-            confRow(0.31, "A follow-on round — early, but he may float it.")
+            confRow(0.94, "Net retention by cohort — M6 and M12.")
+            confRow(0.88, "Whether seed is enough to skip an A.")
+            confRow(0.31, "The IP side-letter.")
             label("Open with")
-            row("\"The churn slide moved — V. sent fresher numbers this morning.\"")
+            row("Retention, not the round. He'll be impatient otherwise — and the cohort is the strongest thing you have.")
             Button { onOpenFull() } label: {
                 Text("OPEN FULL BRIEF →")
                     .font(Theme.Font.mono(10)).tracking(1.2)
                     .foregroundStyle(Theme.Palette.tealDeep)
+                    .padding(.bottom, 2)
+                    .overlay(alignment: .bottom) {        // border-bottom 1px teal
+                        Rectangle().fill(Theme.Palette.tealDeep.opacity(0.3)).frame(height: 1)
+                    }
                     .padding(.top, 14)
             }
             .buttonStyle(.plain)

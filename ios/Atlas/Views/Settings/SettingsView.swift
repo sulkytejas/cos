@@ -9,8 +9,7 @@ struct SettingsView: View {
     @Query private var allWatchers: [Watcher]
     @State private var tone: BriefTone = .calm
     @State private var briefTime: String = "06:30"
-    @State private var apiKey: String = UserDefaults.standard.string(forKey: "GeminiAPIKey") ?? ""
-    @State private var anthropicKey: String = UserDefaults.standard.string(forKey: "AnthropicAPIKey") ?? ""
+    @State private var apiKey: String = ""
     @State private var iconStatus: IconStatus = .idle
     @State private var iconErrors: [String: String] = [:]   // title → error message
     @State private var engineStatus: EngineStatus = .init()
@@ -62,35 +61,10 @@ struct SettingsView: View {
                 .padding(.horizontal, 22)
 
             VStack(alignment: .leading, spacing: 10) {
-                Text("The agent runs while the app is foreground and again in short bursts in the background. Captures flow through it on their way to becoming proposals.")
+                Text("Ayumi's agent runs on the server now, behind one throttled AI gateway. There is no API key on this device — the device holds only a Keychain bearer token and reads results over https.")
                     .font(Theme.Font.sans(13))
                     .foregroundStyle(Theme.Palette.inkSecondary)
                     .lineSpacing(3)
-
-                HStack(spacing: 8) {
-                    MicroText(text: "Claude key")
-                    SecureField("sk-ant-…", text: $anthropicKey)
-                        .textFieldStyle(.plain)
-                        .font(Theme.Font.mono(12))
-                        .foregroundStyle(Theme.Palette.ink)
-                        .padding(.horizontal, 10).padding(.vertical, 8)
-                        .background(Theme.Palette.bgSunk)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 4)
-                                .strokeBorder(Theme.Palette.hairline, lineWidth: 1)
-                        )
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
-                        .onChange(of: anthropicKey) { _, new in
-                            UserDefaults.standard.set(new.trimmingCharacters(in: .whitespacesAndNewlines),
-                                                      forKey: "AnthropicAPIKey")
-                        }
-                }
-                Text("The agent runs on Claude. Paste an Anthropic API key from console.anthropic.com — it stays on this device.")
-                    .font(Theme.Font.sans(12))
-                    .foregroundStyle(Theme.Palette.inkFaint)
-                    .lineSpacing(2)
 
                 VStack(spacing: 0) {
                     SettingRow(label: "Pending events") {

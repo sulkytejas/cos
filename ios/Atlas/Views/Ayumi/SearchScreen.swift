@@ -6,6 +6,7 @@ import SwiftData
 struct SearchScreen: View {
     @Environment(HaloController.self) private var halo
     @Environment(\.modelContext) private var context
+    @Environment(AtlasRepo.self) private var repo
     @Query private var briefs: [Brief]
     @Query private var entries: [Entry]
     @Query private var decisions: [Decision]
@@ -71,7 +72,9 @@ struct SearchScreen: View {
     }
 
     private var scopeRow: some View {
-        HStack(spacing: 6) {
+        // Six chips don't fit one phone-width row — wrap whole chips onto a
+        // second line (like the mock) instead of wrapping the label to "BRIE/FS".
+        FlowLayout(spacing: 6) {
             chip("All", nil)
             chip("Briefs", .brief)
             chip("Notes", .note)
@@ -84,6 +87,7 @@ struct SearchScreen: View {
         let on = scope == t
         return Button { withAnimation(.easeOut(duration: 0.18)) { scope = t } } label: {
             Text(label.uppercased()).font(Theme.Font.mono(9)).tracking(1.0)
+                .lineLimit(1).fixedSize()
                 .foregroundStyle(on ? .white : Theme.Palette.inkFaint)
                 .padding(.horizontal, 11).padding(.vertical, 5)
                 .background(Capsule().fill(on ? Theme.Palette.ink : Color.clear))
@@ -275,20 +279,18 @@ struct SearchScreen: View {
             let key = "\(scopeNow?.rawValue ?? "all")|\(q.lowercased())"
             if let cached = ragCache[key] { ragAnswer = cached; halo.setState(.delivered); return }
 
-            // Only spend a call when it can actually help.
-            guard q.count >= 3, !hits.isEmpty, AtlasLLM.isConfigured else {
+            // Grounded RAG runs server-side: `repo.ask` enqueues `ai.ask`, the
+            // worker answers (Haiku) grounded in the user's own server rows, and
+            // we render the answer (§4.a). Gated so we don't spend per keystroke;
+            // the server enforces the real caps + per-user budget.
+            guard q.count >= 3, !hits.isEmpty else {
                 halo.setState(currentAnswer != nil ? .delivered : .idle)
                 return
             }
-            let context = hits.prefix(8)
-                .map { "- [\($0.type.rawValue)] \($0.title)\($0.meta.isEmpty ? "" : " — \($0.meta)")" }
-                .joined(separator: "\n")
-            let system = "You are Ayumi, a calm chief-of-staff. Answer the user's query in 1–2 short sentences, first person, grounded ONLY in the provided context. If the context doesn't contain the answer, say what you do see instead. Never invent facts."
-            let user = "Query: \(q)\n\nContext from the user's own data:\n\(context)"
             do {
-                let text = try await AtlasLLM.complete(system: system, user: user, maxTokens: 200)
+                let result = try await repo.ask(q, scope: scopeNow?.rawValue)
                 if Task.isCancelled { return }
-                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                let trimmed = result.answer.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !trimmed.isEmpty { ragCache[key] = trimmed; ragAnswer = trimmed }
                 halo.setState(.delivered)
             } catch {

@@ -5,10 +5,17 @@ import os
 @main
 struct AtlasApp: App {
     let container: ModelContainer
+    /// The single SwiftData writer (SERVER_ARCHITECTURE.md §4.e). The brain runs
+    /// on the server; this thin client only swaps imperative calls onto the repo
+    /// and mirrors server rows into the cache for the `@Query` reads.
+    @State private var repo: AtlasRepo
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
-        self.container = AppContainer.make()
+        let container = AppContainer.make()
+        self.container = container
+        // Build the repo on the container's main context (it is `@MainActor`).
+        _repo = State(initialValue: AtlasRepo(context: ModelContext(container)))
         configureAppearance()
         dumpFontRegistry()
         // Dev-only band override via launch arg. Run with:
@@ -23,12 +30,8 @@ struct AtlasApp: App {
             default: break
             }
         }
-        // Hand the container to the agent + register the BG refresh task.
-        // Must happen before the app finishes launching (Apple docs).
-        let captured = self.container
-        Task { await AtlasAgent.shared.attach(container: captured) }
-        BackgroundRefresh.register()
-        // Ask for calendar access so the connector can read the real schedule.
+        // Ask for calendar access so EventKit can be pushed to the server as
+        // `calendar` signals (the device-only push source, §4.e).
         Task { await EventKitCalendarSource.requestAccess() }
     }
 
@@ -51,35 +54,57 @@ struct AtlasApp: App {
 
     var body: some Scene {
         WindowGroup {
-            if Self.showAyumi {
+            #if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("--capture") {
+                // DEBUG-only: verify the Capture system (cue + well) in isolation.
+                CapturePreviewScreen()
+                    .environment(repo)
+                    .preferredColorScheme(.light)
+            } else if Self.showAyumi {
                 AyumiRoot()
+                    .environment(repo)
                     .preferredColorScheme(.light)
             } else {
-                ZStack {
-                    RootView()
-                        .preferredColorScheme(.light)
-                        .tint(Theme.Palette.moss)
-                        .opacity(splashDone ? 1 : 0)
-
-                    if !splashDone {
-                        SplashView(onComplete: {
-                            splashDone = true
-                        })
-                        .transition(.opacity)
-                    }
-                }
+                legacyRoot
             }
+            #else
+            if Self.showAyumi {
+                AyumiRoot()
+                    .environment(repo)
+                    .preferredColorScheme(.light)
+            } else {
+                legacyRoot
+            }
+            #endif
         }
         .modelContainer(container)
         .onChange(of: scenePhase) { _, phase in
-            switch phase {
-            case .active:
-                Task { await AtlasAgent.shared.startForegroundLoop() }
-            case .background:
-                Task { await AtlasAgent.shared.stopForegroundLoop() }
-                BackgroundRefresh.schedule()
-            default:
-                break
+            // The brain is server-side (§4.e). On foreground: pull server rows
+            // into the cache mirror, then push the device calendar as signals
+            // (idempotent — the server upserts on `(source, externalId)`).
+            // `.local` is the developer-only offline fallback — no server I/O.
+            guard DataSource.current.isServer else { return }
+            if phase == .active {
+                Task {
+                    await repo.sync()
+                    await repo.pushCalendarSignals()
+                }
+            }
+        }
+    }
+
+    /// The legacy v0.3 root (splash → RootView), extracted so both the DEBUG and
+    /// release `WindowGroup` branches can reuse it.
+    @ViewBuilder private var legacyRoot: some View {
+        ZStack {
+            RootView()
+                .preferredColorScheme(.light)
+                .tint(Theme.Palette.moss)
+                .opacity(splashDone ? 1 : 0)
+
+            if !splashDone {
+                SplashView(onComplete: { splashDone = true })
+                    .transition(.opacity)
             }
         }
     }

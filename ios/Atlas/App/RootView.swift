@@ -79,7 +79,7 @@ struct RootView: View {
         .blur(radius: showCapture ? 8 : 0)
         .animation(.easeOut(duration: 0.28), value: showCapture)
         .sheet(isPresented: $showCapture) {
-            CaptureSheet()
+            LegacyCaptureSheet()
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.hidden)
                 .presentationCornerRadius(22)

@@ -5,13 +5,25 @@ import SwiftUI
 /// chevrons, the logo-menu index sheet, and horizontal-swipe navigation.
 /// The screen's own content is supplied via `content` and owns its internal
 /// padding (top ~70 to clear the app-mark).
+///
+/// v0.7: the global Capture cue (CaptureHost) is mounted ONCE here, above the
+/// page on EVERY screen, bridged to this shell's Halo so capture drives the
+/// same presence. It lifts above a host bottom bar via `captureAvoidInset`.
 struct PageShell<Content: View>: View {
     var router: NavRouter
     var halo: HaloController
+    /// The screen name shown as "Capturing — over <screen>" + which bottom bar
+    /// (if any) the cue must avoid. Defaults to the router's current page so the
+    /// cue reads correctly without extra wiring.
+    var captureScreenName: String? = nil
+    var captureAvoidInset: CGFloat? = nil
     @ViewBuilder var content: () -> Content
 
     @State private var showIndex = false
     @State private var showSettings = false
+
+    private var screenName: String { captureScreenName ?? router.current.title }
+    private var avoidInset: CGFloat { captureAvoidInset ?? router.current.captureAvoidInset }
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -19,7 +31,10 @@ struct PageShell<Content: View>: View {
             HaloView(controller: halo).ignoresSafeArea()   // the luminous rim
 
             // Page surface: opaque paper, rounded, inset 22 within the safe area.
-            content()
+            // The global Capture cue + well sheet ride above the page content via
+            // CaptureHost (mounted once, not per screen), bridged to this Halo.
+            CaptureHost(content: content, screenName: screenName,
+                        halo: halo, avoidBottomInset: avoidInset)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .background(Theme.Palette.paper)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Layout.pageRadius, style: .continuous))
@@ -82,16 +97,35 @@ struct PageShell<Content: View>: View {
 struct AyumiRoot: View {
     @State private var router = NavRouter()
     @State private var halo = HaloController(rimInset: 11)
-    @Environment(\.modelContext) private var context
+    @Environment(AtlasRepo.self) private var repo
+
+    /// When set, the Living Chapter (North India) takes over the page surface
+    /// inside the same shell (so the Halo / app-mark / inset are shared). Opened
+    /// via the `--chapter north` debug arg, or from Chapters in a later phase.
+    @State private var openChapter: String? = nil
 
     var body: some View {
-        PageShell(router: router, halo: halo) {
-            screen
-                .id(router.current)
-                .transition(.opacity)
+        // When the Living Chapter is open the cue reads "over North India" and
+        // sits at the foot (no host bottom bar on the chapter scroll).
+        PageShell(router: router, halo: halo,
+                  captureScreenName: openChapter != nil ? "North India" : nil,
+                  captureAvoidInset: openChapter != nil ? 0 : nil) {
+            Group {
+                if openChapter != nil {
+                    LivingChapterView(onBack: { withAnimation(Theme.Motion.overshoot()) { openChapter = nil } })
+                } else {
+                    screen
+                        .id(router.current)
+                        .transition(.opacity)
+                }
+            }
         }
         .environment(router)
         .environment(halo)
+        // Chapters → "Open this chapter →" opens the Living Chapter in-shell.
+        .environment(\.openLivingChapter, OpenLivingChapterAction { id in
+            withAnimation(Theme.Motion.overshoot()) { openChapter = id }
+        })
         .task {
             // DEV: jump to a page via `simctl launch … --page brief` for screenshots.
             let args = ProcessInfo.processInfo.arguments
@@ -99,10 +133,15 @@ struct AyumiRoot: View {
                let p = AyumiPage.allCases.first(where: { $0.title.lowercased() == args[i + 1] }) {
                 router.current = p
             }
+            // DEV: open the Living Chapter directly for screenshots.
+            //   xcrun simctl launch <udid> com.atlas.app --chapter north
+            if let i = args.firstIndex(of: "--chapter"), i + 1 < args.count {
+                openChapter = args[i + 1]
+            }
             #if DEBUG
             if args.contains("--seed-calendar") {
                 EventKitCalendarSource.seedDevEvent()
-                ConnectorRunner.pollOnce(in: context)   // force a poll now
+                await repo.pushCalendarSignals()   // push the device calendar now
             }
             #endif
         }
@@ -112,11 +151,32 @@ struct AyumiRoot: View {
         switch router.current {
         case .today: TodayScreen()
         case .brief: BriefScreen()
-        case .capture: CaptureScreen()
         case .chapters: ChaptersScreen()
         case .review: ReviewScreen()
         case .search: SearchScreen()
         }
+    }
+}
+
+// MARK: - Open Living Chapter (in-shell navigation)
+
+/// An action a screen calls to open a chapter's Living Chapter detail in the
+/// same shell (so the Halo / app-mark / capture cue are shared). Carries the
+/// chapter id (e.g. "north"). Defaults to a no-op so previews don't crash.
+struct OpenLivingChapterAction {
+    let open: (String) -> Void
+    func callAsFunction(_ id: String) { open(id) }
+    init(_ open: @escaping (String) -> Void = { _ in }) { self.open = open }
+}
+
+private struct OpenLivingChapterKey: EnvironmentKey {
+    static let defaultValue = OpenLivingChapterAction()
+}
+
+extension EnvironmentValues {
+    var openLivingChapter: OpenLivingChapterAction {
+        get { self[OpenLivingChapterKey.self] }
+        set { self[OpenLivingChapterKey.self] = newValue }
     }
 }
 

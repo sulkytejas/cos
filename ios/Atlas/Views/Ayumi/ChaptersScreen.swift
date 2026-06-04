@@ -7,6 +7,8 @@ import SwiftData
 struct ChaptersScreen: View {
     @Environment(HaloController.self) private var halo
     @Environment(\.modelContext) private var context
+    /// Opens a chapter's Living Chapter detail in-shell (v0.7). Wired by AyumiRoot.
+    @Environment(\.openLivingChapter) private var openLivingChapter
 
     // Live data. Chapters drive nodes, ChapterLinks drive edges, active
     // Watchers drive the live-pulse + watcher counts. All filtering that
@@ -33,6 +35,13 @@ struct ChaptersScreen: View {
         .init(id: "health", glyph: "H", x: 120, y: 250, size: 44, pulse: true, delay: 0.9),
     ]
 
+    /// The North India node (README §"Reaching the chapter", data-ch="north"):
+    /// the v0.7 Living Chapter — live, mid-trip, so it pulses. Always present in
+    /// the constellation (it is intentionally never DB-backed), and selecting it
+    /// surfaces the "Open this chapter →" link into LivingChapterView.
+    private let northNode = Node(id: "north", glyph: "N", x: 206, y: 248,
+                                 size: 50, pulse: true, delay: 0.3)
+
     // Deterministic node positions in the 350×340 space, cycling the seeded
     // anchors by index so the layout stays stable across launches without
     // adding a schema field.
@@ -42,11 +51,12 @@ struct ChaptersScreen: View {
 
     // ─── Live → view models ───────────────────────────────────────
     private var nodes: [Node] {
-        guard !chapterRows.isEmpty else { return seedNodes }
+        // North India is always in the sky (the v0.7 Living Chapter).
+        guard !chapterRows.isEmpty else { return seedNodes + [northNode] }
         let watcherChapterIDs = Set(activeWatchers.compactMap { $0.chapter?.id })
         let sizes: [CGFloat] = [54, 46, 40, 44]
         let delays: [Double] = [0, 0.5, 0, 0.9]
-        return chapterRows.enumerated().map { i, chapter in
+        let live = chapterRows.enumerated().map { i, chapter -> Node in
             let anchor = Self.positionAnchors[i % Self.positionAnchors.count]
             // Spread successive cycles slightly so overlapping anchors fan out.
             let cycle = CGFloat(i / Self.positionAnchors.count)
@@ -63,17 +73,26 @@ struct ChaptersScreen: View {
                 delay: delays[i % delays.count]
             )
         }
+        return live + [northNode]
     }
 
     var body: some View {
         ZStack(alignment: .bottom) {
             VStack(alignment: .leading, spacing: 0) {
-                Text(threadHeader)
-                    .font(Theme.Font.mono(9.5)).tracking(1.7).foregroundStyle(Theme.Palette.ink3)
-                    .padding(.bottom, 6)
-                Text("Your constellation.")
-                    .font(Theme.Font.serifItalic(34)).foregroundStyle(Theme.Palette.ink)
+                // Head (`.head`, padding:6px 24px 0) — inset 24 like the prototype.
+                Group {
+                    Text(threadHeader)
+                        .font(Theme.Font.mono(9.5)).tracking(1.7).foregroundStyle(Theme.Palette.ink3)
+                        .padding(.bottom, 6)
+                    Text("Your constellation.")
+                        .font(Theme.Font.serifItalic(34)).foregroundStyle(Theme.Palette.ink)
+                }
+                .padding(.horizontal, 24)
 
+                // The constellation (`.constellation`, width:100%, height:340) is
+                // FULL-BLEED in the prototype — it breaks out of the head's 24px
+                // inset so S/V sit near the page edges. Node coords live in a
+                // 350×340 space mapped to the full body width.
                 GeometryReader { geo in
                     let w = geo.size.width, h = geo.size.height
                     let sx = { (v: CGFloat) in v / 350 * w }
@@ -86,12 +105,11 @@ struct ChaptersScreen: View {
                         }
                     }
                 }
-                .frame(height: 360)
+                .frame(height: 340)
                 .padding(.top, 8)
 
                 Spacer()
             }
-            .padding(.horizontal, 24)
             .padding(.top, 70)
 
             detailStrip
@@ -105,7 +123,7 @@ struct ChaptersScreen: View {
 
     // Header copy: live counts when chapters exist, else the seeded line.
     private var threadHeader: String {
-        guard !chapterRows.isEmpty else { return "5 THREADS · 3 ACTIVE" }
+        guard !chapterRows.isEmpty else { return "6 THREADS · 4 ACTIVE" }
         let active = chapterRows.filter { $0.status == .active }.count
         return "\(chapterRows.count) THREADS · \(active) ACTIVE"
     }
@@ -113,6 +131,10 @@ struct ChaptersScreen: View {
     private func edges(sx: @escaping (CGFloat) -> CGFloat, sy: @escaping (CGFloat) -> CGFloat) -> some View {
         ZStack {
             if chapterRows.isEmpty || liveEdges.isEmpty {
+                // The exact four edges from the prototype constellation. North
+                // India sits ON the Health→Portrait curve (M120,250 Q200,270
+                // 280,220), so it needs no edge of its own — the H→V curve runs
+                // straight through the N node.
                 edge(90, 90, 150, 130, 220, 100, sx, sy, Theme.Palette.teal, 0.35, nil)
                 edge(220, 100, 250, 170, 280, 220, sx, sy, Theme.Palette.forest, 0.30, nil)
                 edge(90, 90, 70, 180, 120, 250, sx, sy, Theme.Palette.teal, 0.30, [3, 4])
@@ -229,12 +251,24 @@ struct ChaptersScreen: View {
                 ForEach(Array(d.stats.enumerated()), id: \.offset) { _, s in
                     VStack(alignment: .leading, spacing: 2) {
                         Text(s.0).font(Theme.Font.serifItalic(18)).foregroundStyle(Theme.Palette.ink)
-                        Text(s.1.uppercased()).font(Theme.Font.mono(9.5)).tracking(0.4).foregroundStyle(Theme.Palette.ink3)
+                        // Prototype `.stat` has no text-transform — labels stay
+                        // lowercase (notes / watchers / last brief).
+                        Text(s.1).font(Theme.Font.mono(9.5)).tracking(0.4).foregroundStyle(Theme.Palette.ink3)
                     }
                 }
             }
             .padding(.top, 12)
-            if d.open {
+            // A chapter with a Living Chapter detail (North India) gets a real
+            // "Open this chapter →" link into LivingChapterView; the rest keep
+            // the brief affordance.
+            if let chapterId = d.livingChapterId {
+                Button { openLivingChapter(chapterId) } label: {
+                    Text("OPEN THIS CHAPTER →").font(Theme.Font.mono(10)).tracking(1.2)
+                        .foregroundStyle(Theme.Palette.tealDeep)
+                        .padding(.top, 14).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            } else if d.open {
                 Text("OPEN LATEST BRIEF →").font(Theme.Font.mono(10)).tracking(1.2).foregroundStyle(Theme.Palette.tealDeep)
                     .padding(.top, 14)
             }
@@ -257,11 +291,54 @@ struct ChaptersScreen: View {
     }
 
     private func label(_ id: String) -> String {
-        if let c = chapter(for: id) { return c.title }
+        if id == "north" { return "North India" }   // the v0.7 chapter, never DB-backed
+        if let c = chapter(for: id) { return Self.shortLabel(c.title) }
         return ["strat": "Stratyfix", "ireland": "Ireland MBA", "portrait": "Portrait", "health": "Health"][id] ?? id
     }
-    private struct Detail { let status: String; let title: String; let desc: String; let stats: [(String, String)]; let open: Bool; let active: Bool }
+
+    /// Node `.lbl` text. The prototype labels nodes with a short thread name
+    /// ("Stratyfix", "Ireland MBA") while the detail strip carries the full
+    /// title ("Stratyfix seed round"). Full DB titles overflow and overlap the
+    /// neighbouring node, so collapse to the first ~two leading words, dropping
+    /// trailing lowercase connectives (seed / relocation / baseline / valley…).
+    private static func shortLabel(_ title: String) -> String {
+        let words = title.split(separator: " ").map(String.init)
+        guard !words.isEmpty else { return title }
+        var kept: [String] = []
+        for w in words {
+            // Keep up to two leading Capitalised / acronym words; stop at the
+            // first lowercase descriptor ("seed", "relocation", "baseline").
+            if let f = w.first, f.isUppercase {
+                kept.append(w)
+                if kept.count == 2 { break }
+            } else {
+                break
+            }
+        }
+        if kept.isEmpty { kept = [words[0]] }
+        // Drop a dangling connective ("Varanasi +" → "Varanasi").
+        if let last = kept.last, last.allSatisfy({ !$0.isLetter }) { kept.removeLast() }
+        return kept.joined(separator: " ")
+    }
+    private struct Detail {
+        let status: String; let title: String; let desc: String
+        let stats: [(String, String)]; let open: Bool; let active: Bool
+        /// Non-nil ⇒ show "Open this chapter →" routing into LivingChapterView.
+        var livingChapterId: String? = nil
+    }
     private func detail(_ id: String) -> Detail {
+        // The North India chapter is the v0.7 Living Chapter — never DB-backed,
+        // and it carries the "Open this chapter →" link into LivingChapterView.
+        if id == "north" {
+            return .init(
+                status: "Active · day 5 · in Rishikesh",
+                title: "North India",
+                desc: "Built from one flight email. I inferred a 12-day route, Delhi in to Chandigarh out, and I'm watching 4 sources as you go.",
+                stats: [("₹34.7k", "spent"), ("2/5", "stops"), ("4", "sources")],
+                open: true, active: true, livingChapterId: "north"
+            )
+        }
+
         // Live chapter selected → drive the strip from the model.
         if let c = chapter(for: id) {
             let isActive = c.status == .active

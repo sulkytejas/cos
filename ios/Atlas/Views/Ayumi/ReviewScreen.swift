@@ -7,6 +7,7 @@ import SwiftData
 struct ReviewScreen: View {
     @Environment(HaloController.self) private var halo
     @Environment(\.modelContext) private var context
+    @Environment(AtlasRepo.self) private var repo
 
     @Query(filter: #Predicate<Proposal> { $0.statusRaw == "pending" },
            sort: \.createdAt, order: .reverse)
@@ -159,29 +160,31 @@ struct ReviewScreen: View {
 
     // ─── Resolve ──────────────────────────────────────────────────
 
-    /// Approve: live → materialize the proposal; seed → array removal.
+    /// Approve: live → repo.approve (optimistic-local flip + server fan-out,
+    /// transition-guarded so a retry can't double-file, §4.d); seed → array removal.
     private func approve(_ item: Item) {
         if let proposal = item.proposal {
             halo.setState(.thinking)
-            withAnimation(.timingCurve(0.34, 1.06, 0.64, 1, duration: 0.36)) {
-                proposal.materialize(in: context)
-                try? context.save()
-            }
+            let id = proposal.id
+            // The visible row removal animates off the @Query refresh after the
+            // server write lands; the write itself isn't an animatable mutation,
+            // so run it as a plain Task (wrapping it in withAnimation is a no-op).
+            Task { try? await repo.approve(id) }
             scheduleHalo()
         } else {
             resolveSeed(item)
         }
     }
 
-    /// Decline: live → dismiss the proposal; seed → array removal.
+    /// Decline: live → repo.dismiss (optimistic-local then write-through);
+    /// seed → array removal.
     private func decline(_ item: Item) {
         if let proposal = item.proposal {
             halo.setState(.thinking)
-            withAnimation(.timingCurve(0.34, 1.06, 0.64, 1, duration: 0.36)) {
-                proposal.status = .dismissed
-                proposal.decidedAt = Date()
-                try? context.save()
-            }
+            let id = proposal.id
+            // See approve(_:) — the row animates off the @Query refresh, so the
+            // server write runs as a plain Task (withAnimation here is a no-op).
+            Task { try? await repo.dismiss(id) }
             scheduleHalo()
         } else {
             resolveSeed(item)
@@ -215,14 +218,12 @@ struct ReviewScreen: View {
     private func approveAll() {
         if !pending.isEmpty {
             halo.setState(.thinking)
-            let proposals = pending
-            for (i, proposal) in proposals.enumerated() {
+            let ids = pending.map(\.id)
+            for (i, id) in ids.enumerated() {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.18 * Double(i)) {
-                    withAnimation(.timingCurve(0.34, 1.06, 0.64, 1, duration: 0.36)) {
-                        proposal.materialize(in: context)
-                        try? context.save()
-                    }
-                    if i == proposals.count - 1 {
+                    // Staggered server writes; rows animate off the @Query refresh.
+                    Task { try? await repo.approve(id) }
+                    if i == ids.count - 1 {
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { halo.setState(.delivered) }
                     }
                 }
@@ -283,22 +284,24 @@ struct ReviewScreen: View {
     }
 
     // ─── Seed ─────────────────────────────────────────────────────
+    // Authoritative copy mirrors `Atlas v0.6 - Review × Halo.html`: only the
+    // `said` span is the italic ink-2 run; the lead/trail stay roman ink.
     static let seed: [Item] = [
         .init(tag: "Draft reply", tone: .draft, when: "03:42",
-              lead: "Reply to Karan — ", said: "\"Sending the M6 cohort slice ahead of 14:30.\"", trail: "",
-              why: "He reads replies; a fast, specific note lands better than a deck.",
+              lead: "Reply to ", said: "Karan", trail: " — \"Sending the M6 cohort slice ahead of 2:30. See you then.\"",
+              why: "He asked twice; a short ack keeps you warm without overcommitting.",
               cite: "trace · gmail thread + your calendar", approve: "Send it", decline: "Not yet"),
         .init(tag: "Filed", tone: .filed, when: "04:10",
-              lead: "Filed ", said: "V.'s fresh churn numbers", trail: " under Stratyfix.",
-              why: "They supersede the deck v3 slide; linked so you'll find them at 14:30.",
-              cite: "trace · drive", approve: "Keep in thread", decline: "Just archive"),
-        .init(tag: "Held", tone: .held, when: "05:01",
-              lead: "Held a VFS slot alert — ", said: "the June 28 cutoff is firming.", trail: "",
-              why: "Ireland MBA depends on it; I didn't book anything without you.",
-              cite: "trace · vfs portal", approve: "Add to Ireland", decline: "Dismiss"),
-        .init(tag: "Todo drafted", tone: .draft, when: "06:22",
-              lead: "Drafted a todo: ", said: "Confirm the studio's new address with V.", trail: "",
-              why: "The portrait sitting moved one block south; easy to get wrong.",
-              cite: "trace · imessage", approve: "Add todo", decline: "Skip"),
+              lead: "Filed 23 newsletters; surfaced ", said: "one", trail: " — the SaaS retention teardown you star things like.",
+              why: "Matches 9 prior saves. Want it in the Stratyfix thread?",
+              cite: "trace · inbox rules + save history", approve: "Keep in thread", decline: "Just archive"),
+        .init(tag: "Held", tone: .held, when: "05:05",
+              lead: "A recruiter pinged about a Dublin role. I ", said: "held it", trail: " — looked relevant to Ireland MBA.",
+              why: "Could be noise. Promote to the chapter, or dismiss?",
+              cite: "trace · linkedin + Ireland watcher", approve: "Add to Ireland", decline: "Dismiss"),
+        .init(tag: "Todo drafted", tone: .draft, when: "06:30",
+              lead: "Drafted a todo: ", said: "\"Confirm V.'s new 11:30 studio time.\"", trail: "",
+              why: "Her email moved the sitting; you haven't replied.",
+              cite: "trace · gmail + calendar", approve: "Add todo", decline: "Skip"),
     ]
 }
