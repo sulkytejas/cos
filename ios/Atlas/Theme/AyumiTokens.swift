@@ -23,6 +23,7 @@ extension Color {
 extension Theme.Palette {
     // ── Surfaces / ink (additive aliases to the correctly-valued tokens) ──
     static let paperDeep = Color(hex: 0xF7F7F5)   // --paper-deep (sunk wells, inputs)
+    static let desk = Color(hex: 0xEDEDEA)        // --desk ("the room around the phone" — the rim behind the page card; the Halo tints it warm in renders)
     static let ink2 = Color(hex: 0x2C3942)        // --ink-2
     static let ink3 = Color(hex: 0x6A7480)        // --ink-3 (mono meta)
     static let ink4 = Color(hex: 0xAAB2BB)        // --ink-4 (faint, hairline dots)
@@ -86,20 +87,25 @@ extension Theme.Radii {
 
 extension View {
     /// --shadow-1 (cards). Cool-neutral, never warm. SwiftUI has no negative
-    /// spread, so the design's `-Npx` spread is approximated by a smaller radius.
+    /// spread, so each CSS layer `x y blur s` maps to radius = blur/2 + s/2
+    /// (the inset shape blurs to a visibly tighter halo) with alpha scaled by
+    /// ~(1 + s/(2·blur)) for the light lost to the inset. Raw blur/2 with the
+    /// spread ignored read far too wide/heavy under chips and buttons.
+    /// CSS: 0 0.5 1/.04, 2 4 10 -4/.06, 4 12 28 -14/.10
     func shadow1() -> some View {
         let c = Color(hex: 0x141820)   // rgb 20,24,32
         return self
             .shadow(color: c.opacity(0.04), radius: 0.5, x: 0, y: 0.5)
-            .shadow(color: c.opacity(0.06), radius: 5,   x: 2, y: 4)
-            .shadow(color: c.opacity(0.10), radius: 14,  x: 4, y: 12)
+            .shadow(color: c.opacity(0.05), radius: 3,   x: 2, y: 4)
+            .shadow(color: c.opacity(0.07), radius: 7,   x: 4, y: 12)
     }
     /// --shadow-2 (lifted / dark surfaces).
+    /// CSS: 0 1 1/.05, 3 6 14 -4/.09, 6 16 32 -10/.14 — same spread mapping.
     func shadow2() -> some View {
         let c = Color(hex: 0x141820)
         return self
             .shadow(color: c.opacity(0.05), radius: 0.5, x: 0, y: 1)
-            .shadow(color: c.opacity(0.09), radius: 7,   x: 3, y: 6)
-            .shadow(color: c.opacity(0.14), radius: 16,  x: 6, y: 16)
+            .shadow(color: c.opacity(0.08), radius: 5,   x: 3, y: 6)
+            .shadow(color: c.opacity(0.12), radius: 11,  x: 6, y: 16)
     }
 }

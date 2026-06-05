@@ -8,6 +8,7 @@ struct BriefScreen: View {
     @Environment(HaloController.self) private var halo
     @Environment(\.modelContext) private var context
     @Environment(AtlasRepo.self) private var repo
+    @Environment(NavRouter.self) private var router
 
     /// Most-recent surfaced Brief, if any. Empty → hardcoded fallback below.
     @Query(filter: #Predicate<Brief> { $0.statusRaw == "surfaced" },
@@ -21,7 +22,24 @@ struct BriefScreen: View {
 
     // ─── Live brief binding ───────────────────────────────────────
     /// The brief we drive sections from, or nil → fully hardcoded screen.
-    private var liveBrief: Brief? { surfacedBriefs.first }
+    ///
+    /// This surface is the *person* brief (the reference is Karan's pre-meeting
+    /// prep: person → timeline → tactical …). Several briefs can be `surfaced`
+    /// at once (portrait sitting, trip approaching), and their `surfaceAt`
+    /// ordering is not stable across a server sync — a plain `.first` can land
+    /// on the trip brief, which has no person and a *trip-itinerary* timeline,
+    /// so the screen would bind to the wrong dataset. Prefer the brief whose
+    /// decoded structure carries a `.person` section; fall back to the newest
+    /// surfaced one only if none does.
+    private var liveBrief: Brief? {
+        surfacedBriefs.first { Self.hasPerson($0) } ?? surfacedBriefs.first
+    }
+
+    /// True when a brief's encoded structure contains a `.person` section.
+    private static func hasPerson(_ brief: Brief) -> Bool {
+        guard let s = try? JSONDecoder().decode(BriefStructure.self, from: brief.structureData) else { return false }
+        return s.sections.contains { if case .person = $0 { return true } else { return false } }
+    }
 
     /// Decode structureData ONCE (same approach as BriefRenderer.structure).
     private var structure: BriefStructure? {
@@ -53,6 +71,13 @@ struct BriefScreen: View {
         ZStack(alignment: .bottom) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
+                    navBar
+                        // Ref topbar→first-feed gap (Today glyph top → Ayumi row)
+                        // is ~45pt; at .bottom 18 the sim landed ~9pt tight. The
+                        // CSS `.conv` clears the topbar with more air than the bare
+                        // 18pt here — open it to 27 so the Ayumi meta row drops to
+                        // the reference y.
+                        .padding(.bottom, 27)
                     framing
                     // The 46pt slot is a subject/name, not a sentence. Use the
                     // brief's person name when it carries one; otherwise this is
@@ -62,13 +87,25 @@ struct BriefScreen: View {
                         .font(Theme.Font.serifItalic(46))
                         .foregroundStyle(Theme.Palette.ink)
                         .tracking(-0.9)
-                        .padding(.top, 18)
+                        // CSS .brief-title { margin: 18px 0 2px; line-height: 0.98 }.
+                        // Instrument Serif's SwiftUI line box adds ~11pt of leading
+                        // below the glyphs at 46pt; pull the brief-sub up so it sits
+                        // ~2pt under the title (mock gap ≈12pt, not the ~23pt the
+                        // default line box yields). The same top leading also pushed
+                        // the title (and everything below) ~3.3pt low vs the
+                        // reference — the CSS 18px margin is measured from the tight
+                        // line-height:0.98 box, so trim the SwiftUI top to 15 to
+                        // reabsorb that cumulative drift (title/sub/person/history
+                        // all ride back up to the design y).
+                        .padding(.top, 15)
+                        .padding(.bottom, -8)
                     HStack(spacing: 8) {
                         Text("today · 14:30").font(Theme.Font.mono(10)).tracking(0.4).foregroundStyle(Theme.Palette.tealDeep)
                         Rectangle().fill(Theme.Palette.rule).frame(width: 1, height: 9)
                         Text("Sequoia India · seed").font(Theme.Font.mono(10)).tracking(0.4).foregroundStyle(Theme.Palette.ink3)
                     }
-                    .padding(.top, 6)
+                    // CSS .brief-title margin-bottom 2px → brief-sub sits ~2pt below.
+                    .padding(.top, 2)
 
                     section("Person") { personBlock }
                     section("Your history with Karan") { timeline }
@@ -80,8 +117,19 @@ struct BriefScreen: View {
                     Spacer().frame(height: 110)
                 }
                 .padding(.horizontal, 22)
-                .padding(.top, 70)
+                .padding(.top, 6)            // CSS .conv padding-top 6
             }
+            // The Today/STRATYFIX nav row replaces the shell app-mark on Brief
+            // (the shell suppresses AppMark for .brief — see sharedRequests), so
+            // content starts at the topbar band offset (CSS `.topbar{top:30px}`,
+            // measured inside the page which is itself inset 22pt) rather than the
+            // old 64px sentence inset. Pass-7: the ScrollView's own safe-area
+            // content inset added ~4pt on top of this 30, landing the '‹ Today'
+            // glyph at y63 vs the reference's y59 — pull this to 26 so the whole
+            // header band + content column rides ~4pt higher to the design y.
+            // The bottom stays open for the sticky action zone (the big in-content
+            // spacer clears it).
+            .padding(.top, 26)
 
             actionZone
             EOLayer(rings: rings)
@@ -107,24 +155,111 @@ struct BriefScreen: View {
         .padding(.top, 22)
     }
 
+    // ─── Header nav (replaces the shell app-mark on Brief) ────────
+    /// Reference top chrome: a left `‹ Today` back-affordance (sans, dark ink)
+    /// and a right `STRATYFIX ▾` trip/context label (mono, gray, tracked).
+    private var navBar: some View {
+        HStack(alignment: .center, spacing: 0) {
+            Button { withAnimation(Theme.Motion.overshoot()) { router.go(.today) } } label: {
+                // CSS `.back`: ink-2, sans 14px, gap 6px, thin chevron (svg stroke 1.4).
+                HStack(spacing: 6) {
+                    Image(systemName: "chevron.left").font(.system(size: 13, weight: .regular))
+                    Text("Today").font(Theme.Font.sans(14))
+                }
+                .foregroundStyle(Theme.Palette.ink2)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            Spacer()
+            // CSS `.crumb`: mono 9.5px, ink-3, letter-spacing 0.16em (≈1.5pt),
+            // with a literal filled caret "▾" inline (not an SF chevron).
+            Text("STRATYFIX ▾").font(Theme.Font.mono(9.5)).tracking(1.5)
+                .foregroundStyle(Theme.Palette.ink3)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
     private var framing: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
-                AyumiAvatar(size: 18)
+                // Reference Ayumi avatar is a flat solid dark-green disc (no glossy
+                // catchlight / teal pulse), unlike the shared `AyumiAvatar`. Render
+                // the flat disc locally so the shared component (used glossy on
+                // Today etc.) is left untouched.
+                Circle().fill(Color(hex: 0x2E4A42)).frame(width: 18, height: 18)
                 Text("Ayumi").font(Theme.Font.serifItalic(14)).foregroundStyle(Theme.Palette.ink)
                 Spacer()
                 Text("drafted 06:40 · 6 sources").font(Theme.Font.mono(9.5)).tracking(0.5).foregroundStyle(Theme.Palette.ink4)
             }
-            ayumiProse([
-                .init("You have "),
-                .init("20 minutes", .accent),
-                .init(" with "),
-                .init("Karan", .roman),
-                .init(". He'll want signal, not a pitch — open with the retention curve and let the round come to you."),
-            ], size: 21, color: Theme.Palette.ink)
-            .lineSpacing(5)
-            .fixedSize(horizontal: false, vertical: true)
+            // CSS `em.accent` is a teal highlighter *band* low over the glyphs
+            // (`linear-gradient transparent 64% → rgba(0,137,168,0.16) 64%–92% →
+            // transparent`), NOT a full-height block. AttributedString
+            // `backgroundColor` would fill the whole em box (≈22pt at 21px → the
+            // tall block the pass-4 diff flagged). Instead stack two identical
+            // wrapping Texts: the BACK copy carries the teal band on "20 minutes"
+            // and is masked to reveal only the lower 64–92% of each line, so the
+            // band sits low and thin exactly where the run lands (wrapping stays
+            // identical across both copies); the FRONT copy paints crisp glyphs
+            // over it. The "20 minutes" run is roman (CSS `em.accent{font-style:
+            // normal}`); the rest is serif italic, "Karan" roman.
+            Text(briefProse(highlighted: true))
+                .lineSpacing(1)                  // CSS line-height 1.34 × 21 ≈ 28pt pitch; Instrument Serif's natural line box already adds ~6pt leading, so lineSpacing(3) over-led to ~30pt — pull to 1 for a true 28pt pitch.
+                .fixedSize(horizontal: false, vertical: true)
+                .mask(highlightBandMask)
+                .overlay(alignment: .topLeading) {
+                    Text(briefProse(highlighted: false))
+                        .lineSpacing(1)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
         }
+    }
+
+    /// A low repeating highlighter window: for each ~28pt line (text 21pt +
+    /// lineSpacing 1 + ~6pt natural leading) reveal only the band sitting 64%→92%
+    /// down the line box (≈8pt tall, straddling the baseline) — the highlighter
+    /// read from the reference and the CSS gradient (transparent 64% → teal
+    /// 64–92% → transparent), NOT the full-height block. Bands are laid out from
+    /// the BOTTOM up so the last line (where "20 minutes" sits) keeps its band
+    /// aligned to the baseline regardless of per-line advance rounding.
+    private var highlightBandMask: some View {
+        let line: CGFloat = 28                      // text 21 + lineSpacing 1 + leading
+        let bandTop: CGFloat = line * 0.64          // CSS teal start (64% of line box) — sits low, near the baseline
+        let bandH: CGFloat = line * 0.28            // CSS 64%→92% (≈8pt) — straddles the baseline
+        return GeometryReader { geo in
+            VStack(spacing: 0) {
+                Spacer(minLength: 0)
+                ForEach(0..<Int((geo.size.height / line).rounded(.up)) + 1, id: \.self) { _ in
+                    VStack(spacing: 0) {
+                        Color.clear.frame(height: bandTop)
+                        Color.black.frame(height: bandH)
+                        Color.clear.frame(height: line - bandTop - bandH)
+                    }
+                }
+            }
+        }
+    }
+
+    /// The framing paragraph. Built locally (not via `ayumiProse`). Italic serif
+    /// voice; "Karan" and the accented "20 minutes" stay roman. When `highlighted`
+    /// the "20 minutes" run carries the teal band fill (revealed low by the mask);
+    /// the glyph copy passes `highlighted: false` so the band never tints text.
+    private func briefProse(highlighted: Bool) -> AttributedString {
+        let size: CGFloat = 21
+        func run(_ s: String, italic: Bool = true) -> AttributedString {
+            var a = AttributedString(s)
+            a.font = .custom(italic ? Theme.Typeface.serifItalic : Theme.Typeface.serifRegular, size: size)
+            // The band copy hides its glyphs (clear ink) so the low mask reveals
+            // only the teal stripe — the visible glyphs come from the front copy.
+            a.foregroundColor = highlighted ? Color.clear : Theme.Palette.ink
+            return a
+        }
+        var highlight = run("20 minutes", italic: false)
+        if highlighted { highlight.backgroundColor = Theme.Palette.teal.opacity(0.16) }
+        return run("Here's what you need for ")
+            + run("Karan", italic: false)
+            + run(". He'll push on retention — I'd open with the cohort, not the round. He runs late, so plan for ")
+            + highlight
+            + run(", not 30.")
     }
 
     private var personBlock: some View {
@@ -137,9 +272,9 @@ struct BriefScreen: View {
                     if let facts = personData?.facts, !facts.isEmpty {
                         ForEach(facts, id: \.self) { fact($0) }
                     } else {
-                        fact("Led the seed in your last company; warm but exacting.")
-                        fact("Writes publicly about retention — reads replies.")
-                        fact("Prefers a 20-minute walk to a deck.")
+                        fact("Led your A round at Visu in '22.")
+                        fact("Runs late — block 20 min, not 30.")
+                        fact("Asked at Soam dinner: \"show me month-6 retention.\"")
                     }
                 }
                 .padding(.top, 12)
@@ -148,8 +283,16 @@ struct BriefScreen: View {
     }
     private func fact(_ s: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Circle().fill(Theme.Palette.ink4).frame(width: 4, height: 4)
-            Text(s).font(Theme.Font.serif(15)).foregroundStyle(Theme.Palette.ink2).lineSpacing(3)
+            // CSS `.person .fact .b { align-items:baseline; transform:translateY(-3px) }`
+            // — the 4pt dot is baseline-aligned then LIFTED 3pt so it centers on the
+            // 15pt glyph (bullet center ≈ cap-center). `.firstTextBaseline` alone
+            // parks it on the baseline (~3pt low); the -3pt offset restores the lift.
+            Circle().fill(Theme.Palette.ink4).frame(width: 4, height: 4).offset(y: -3)
+            // CSS .person .fact line-height 1.4 × 15px ≈ 21pt pitch. Instrument
+            // Serif's natural line box at 15pt already runs ~19pt, so lineSpacing(3)
+            // over-led each wrapped fact and let the Person block accumulate ~2pt of
+            // drift into the 'Your history' label — pull to 2 for a true ~21pt pitch.
+            Text(s).font(Theme.Font.serif(15)).foregroundStyle(Theme.Palette.ink2).lineSpacing(2)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -157,12 +300,20 @@ struct BriefScreen: View {
     private var timeline: some View {
         VStack(alignment: .leading, spacing: 0) {
             if let items = timelineData?.items, !items.isEmpty {
-                ForEach(items) { item in
-                    timelineItem(date: item.date, text: item.text, inferred: item.subtle ?? false, cite: nil)
+                // Inferred (subtle) entries get the hollow-ring + italic treatment
+                // AND a source-cite chip, alternating twitter → email like the
+                // reference. The TimelineData model carries no cite key, so derive
+                // it here, in inferred order, from the canned receipts.
+                let cited = Self.citedTimeline(items)
+                ForEach(Array(cited.enumerated()), id: \.offset) { _, row in
+                    timelineItem(date: Self.timelineDate(row.item.date),
+                                 text: row.item.text,
+                                 inferred: row.item.subtle ?? false,
+                                 cite: row.cite)
                 }
             } else {
-                timelineItem(date: "2026 · 01 · 14", text: "Dinner at Soam — you walked him through the wedge.", inferred: false, cite: nil)
-                timelineItem(date: "2026 · 03 · 02", text: "Liked your tweet about the M6 curve.", inferred: true, cite: ("cite · twitter", .tw))
+                timelineItem(date: "2026 · 01 · 14", text: "Dinner at Soam. He asked you to keep him posted on retention.", inferred: false, cite: nil)
+                timelineItem(date: "2026 · 03 · 02", text: "Liked your tweet about the M6 cohort curve — first sign he reads them.", inferred: true, cite: ("cite · twitter", .tw))
                 timelineItem(date: "2026 · 04 · 11", text: "Coffee at Blue Tokai — he floated intros.", inferred: false, cite: nil)
                 timelineItem(date: "2026 · 05 · 18", text: "No reply to the data-room email yet.", inferred: true, cite: ("cite · email", .em))
             }
@@ -180,14 +331,24 @@ struct BriefScreen: View {
                 .foregroundStyle(Theme.Palette.ink2).lineSpacing(3).fixedSize(horizontal: false, vertical: true)
             if let cite { CiteButton(label: cite.0) { open(cite.1) }.padding(.top, 5) }
         }
+        // CSS `.ti { padding: 6px 0 12px }` → 6pt top + 12pt bottom per entry.
+        // The bottom-only padding compressed the timeline (~12pt cumulative
+        // drift), pulling the cite line up and revealing the 4th entry that the
+        // reference keeps tucked behind the action-bar fade. Restore the 6pt top
+        // so each entry carries the full ~18pt vertical rhythm and the 04·11 row
+        // sits below the fade as in the design.
+        .padding(.top, 6)
         .padding(.bottom, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .overlay(alignment: .topLeading) {
+            // CSS `.ti::before { top: 12px }` — the dot is anchored 12pt below
+            // the entry's (padded) top edge, i.e. ~6pt under the 6pt top pad to
+            // land on the mono date line. Offset from the padded box's topLeading.
             Circle()
                 .fill(inferred ? Color.clear : Theme.Palette.ink)
                 .overlay(Circle().stroke(Theme.Palette.ink, lineWidth: inferred ? 1 : 0))
                 .frame(width: 7, height: 7)
-                .offset(x: -20, y: 4)
+                .offset(x: -20, y: 10)
         }
     }
 
@@ -282,32 +443,72 @@ struct BriefScreen: View {
 
     // ─── Action zone ──────────────────────────────────────────────
     private var actionZone: some View {
-        VStack(spacing: 0) {
-            LinearGradient(colors: [Theme.Palette.paper.opacity(0), Theme.Palette.paper], startPoint: .top, endPoint: .bottom)
-                .frame(height: 32).allowsHitTesting(false)
-            HStack(spacing: 10) {
-                Button {
-                    emitRing(); halo.setState(.delivered)
-                    withAnimation(Theme.Motion.standard(0.22)) { started = true }
-                    act(.start)   // server flips status + emits brief_acted_on (§4.a)
-                } label: {
-                    Text(started ? "Meeting started" : "Start the meeting")
-                        .font(Theme.Font.serif(17)).foregroundStyle(.white)
-                        .frame(maxWidth: .infinity).padding(.vertical, 14)
-                        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(started ? Theme.Palette.forest : Theme.Palette.ink))
-                }
-                .buttonStyle(.plain)
-                Button { act(.snooze) } label: {
-                    Text("Snooze").font(Theme.Font.serif(15)).foregroundStyle(Theme.Palette.ink)
-                        .padding(.horizontal, 16).padding(.vertical, 14)
-                        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Theme.Palette.paperDeep)
-                            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Theme.Palette.rule, lineWidth: 1)))
-                }
-                .buttonStyle(.plain)
+        // CSS `.action-zone { padding:10px 22px 16px; background:
+        // linear-gradient(180deg, rgba(255,255,255,0) 0%, var(--paper) 32%) }`.
+        // The gradient covers the WHOLE zone (top padding + the button row) and
+        // reaches opaque paper by 32% down, so scrolling content dissolves fully
+        // to white well above the buttons. The previous build faded over only a
+        // 32pt strip that hit full white at its bottom edge, leaving the 'Coffee
+        // at Blue Tokai…' line legible right up to the button top. Paint one
+        // full-zone gradient behind both the top-pad fade band and the buttons,
+        // with the clear→paper transition completing in the upper third of the zone.
+        HStack(spacing: 10) {
+            Button {
+                emitRing(); halo.setState(.delivered)
+                withAnimation(Theme.Motion.standard(0.22)) { started = true }
+                act(.start)   // server flips status + emits brief_acted_on (§4.a)
+            } label: {
+                Text(started ? "Meeting started" : "Start the meeting")
+                    .font(Theme.Font.serif(17)).foregroundStyle(.white)
+                    .frame(maxWidth: .infinity).padding(.vertical, 14)
+                    .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(started ? Theme.Palette.forest : Theme.Palette.ink))
             }
-            .padding(.horizontal, 22).padding(.bottom, 12)
-            .background(Theme.Palette.paper)
+            .buttonStyle(.plain)
+            Button { act(.snooze) } label: {
+                Text("Snooze").font(Theme.Font.serif(15)).foregroundStyle(Theme.Palette.ink)
+                    .padding(.horizontal, 16).padding(.vertical, 14)
+                    .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Theme.Palette.paperDeep)
+                        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Theme.Palette.rule, lineWidth: 1)))
+            }
+            .buttonStyle(.plain)
         }
+        // CSS action-zone padding: 10px top / 22px sides / 16px bottom — but the
+        // CSS gradient reaches opaque paper at 32% of the *whole* zone (incl. the
+        // ~45pt button row), i.e. ~23pt down, dissolving content to white before
+        // the buttons. SwiftUI clips the gradient to this view's bounds, so the
+        // opaque-paper band only covers what falls inside the zone — anything above
+        // the zone's top edge stays fully legible. Pass-8 left a 28pt top pad, so
+        // the band's top sat ~28pt above the buttons and the whole 4th timeline
+        // entry ('2026·04·11 Coffee at Blue Tokai…', date ~32pt / body ~15pt above
+        // the button top) still showed through (the pass-9 occlusion bug). Open the
+        // top pad to ~56pt so the zone rises a full entry above the buttons, and
+        // bring the clear→paper transition forward to ~0.18 so the gradient reaches
+        // opaque paper only ~21pt down — leaving a tall solid-paper band (~35pt)
+        // that fully covers the 4th-entry date (~32pt above the buttons, zone-y ~24)
+        // and body (~15pt above, zone-y ~41) rows, with the soft dissolve landing
+        // above them (the timeline rule fades but no body line reads through,
+        // matching the reference's white gap above 'Start the meeting').
+        //
+        // Bottom: CSS `.action-zone` carries a 16px bottom pad. Pass-6 trimmed this
+        // to 2 (reasoning the zone sat at the bottom safe area, so 16 would flood the
+        // white band past the card-bottom inset), but the per-pixel reference scan
+        // shows the OPPOSITE — the buttons sit ~38pt above the physical bottom with
+        // ~16pt of paper below them, while at .bottom 2 the sim buttons landed only
+        // ~24pt up (button bottom y≈2483 @3x vs ref ≈2441), riding 14pt low into the
+        // home-indicator zone. Restore the CSS 16pt bottom pad: since the zone is
+        // bottom-anchored in the ZStack, the extra 14pt lifts the whole button row UP
+        // by 14pt (button bottom → ~38pt from the physical bottom, matching the ref)
+        // and leaves the ~16pt of paper/gradient the reference shows below the buttons
+        // before the card's rounded bottom + vignette read.
+        .padding(.top, 56).padding(.horizontal, 22).padding(.bottom, 16)
+        .background(
+            LinearGradient(stops: [
+                .init(color: Theme.Palette.paper.opacity(0), location: 0.0),
+                .init(color: Theme.Palette.paper, location: 0.18),
+                .init(color: Theme.Palette.paper, location: 1.0),
+            ], startPoint: .top, endPoint: .bottom)
+            .allowsHitTesting(false)
+        )
     }
 
     // ─── Brief actions (Start / Snooze) ───────────────────────────
@@ -352,6 +553,32 @@ struct BriefScreen: View {
         case .high:   return 0.94
         case .medium: return 0.62
         case .low:    return 0.31
+        }
+    }
+
+    /// Normalise a timeline date to the design's `YYYY · MM · DD` (mono, middot
+    /// separated with hair spaces). Seed data stores `2026·01·14` without spaces;
+    /// just pad the middots so it reads like the reference. Non-`·` formats (e.g.
+    /// "May 23") are passed through untouched — they come from non-Karan briefs.
+    private static func timelineDate(_ raw: String) -> String {
+        guard raw.contains("·") else { return raw }
+        return raw
+            .split(separator: "·", omittingEmptySubsequences: false)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .joined(separator: " · ")
+    }
+
+    /// Pair each timeline item with a source-cite chip when it is inferred,
+    /// drawing the receipt key in inferred order (twitter → email) to match the
+    /// reference's `.ti.inferred .cite` rows.
+    private static func citedTimeline(_ items: [TimelineData.Item]) -> [(item: TimelineData.Item, cite: (String, ReceiptKey)?)] {
+        let inferredKeys: [(String, ReceiptKey)] = [("cite · twitter", .tw), ("cite · email", .em)]
+        var inferredSeen = 0
+        return items.map { item in
+            guard item.subtle ?? false else { return (item, nil) }
+            let cite = inferredKeys[min(inferredSeen, inferredKeys.count - 1)]
+            inferredSeen += 1
+            return (item, cite)
         }
     }
 }

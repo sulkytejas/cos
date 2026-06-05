@@ -31,7 +31,9 @@ enum Seed {
             status: .active,
             startDate: ymd(2026, 5, 1),
             endDate: ymd(2026, 8, 15),
-            purpose: "Close $1.5M seed before MBA starts. Maintain CEO role remotely post-move."
+            // Design detail-strip copy (ref-chapters): Stratyfix is the default-
+            // selected thread, so its purpose reads as the strip's description.
+            purpose: "Karan at 14:30 today. Six notes this month; the open question is month-6 retention."
         )
         let health = Chapter(
             title: "Health baseline",

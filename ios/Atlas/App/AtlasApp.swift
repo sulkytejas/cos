@@ -32,7 +32,21 @@ struct AtlasApp: App {
         }
         // Ask for calendar access so EventKit can be pushed to the server as
         // `calendar` signals (the device-only push source, §4.e).
-        Task { await EventKitCalendarSource.requestAccess() }
+        //
+        // SKIP this eager request during screenshot / dev launches: when any
+        // pixel-match capture arg is present (`--page`, `--chapter`, `--query`,
+        // `--seed-calendar`, `--capture`) the OS would otherwise present the
+        // full-access calendar permission alert ("'Ayumi' Would Like Full Access
+        // to Your Calendar") immediately on launch, centered over whatever screen
+        // is being captured, with a dimming scrim that occludes/desaturates the
+        // frame. The permission isn't part of any screen's UI — gate it so the
+        // alert never renders during capture. (For real runs the request still
+        // fires; for a granted capture, pre-authorize the sim:
+        // `xcrun simctl privacy <udid> grant calendar com.atlas.app`.)
+        let captureArgs: Set<String> = ["--page", "--chapter", "--query", "--seed-calendar", "--capture"]
+        if !CommandLine.arguments.contains(where: captureArgs.contains) {
+            Task { await EventKitCalendarSource.requestAccess() }
+        }
     }
 
     /// One-time print of every bundled font family + PostScript names so we

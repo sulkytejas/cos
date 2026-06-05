@@ -7,31 +7,36 @@ struct EdgeChevrons: View {
     let next: AyumiPage
     let onPrev: () -> Void
     let onNext: () -> Void
+    /// Per-screen overrides for the edge labels when the destination isn't a
+    /// plain `AyumiPage` (e.g. Chapters' right edge leads to the North India
+    /// Living Chapter, which is an overlay, not a page in the ring).
+    var prevLabel: String? = nil
+    var nextLabel: String? = nil
 
     var body: some View {
         HStack {
-            chevron(dir: .leading, page: prev, action: onPrev)
+            chevron(dir: .leading, label: prevLabel ?? prev.title, action: onPrev)
             Spacer()
-            chevron(dir: .trailing, page: next, action: onNext)
+            chevron(dir: .trailing, label: nextLabel ?? next.title, action: onNext)
         }
         .padding(.horizontal, 8)
     }
 
     private enum Dir { case leading, trailing }
 
-    private func chevron(dir: Dir, page: AyumiPage, action: @escaping () -> Void) -> some View {
+    private func chevron(dir: Dir, label: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             VStack(spacing: 5) {
                 Chevron(pointsLeading: dir == .leading)
                     .stroke(Theme.Palette.ink4, style: StrokeStyle(lineWidth: 1.4, lineCap: .round, lineJoin: .round))
                     .frame(width: 13, height: 13)
-                Text(page.title.uppercased())
+                Text(label.uppercased())
                     .font(Theme.Font.mono(7))
                     .tracking(1.3)
                     .foregroundStyle(Theme.Palette.ink4)
                     .fixedSize()
             }
-            .opacity(0.6)
+            .opacity(0.42)
             .frame(width: 44, height: 64)
             .contentShape(Rectangle())
         }

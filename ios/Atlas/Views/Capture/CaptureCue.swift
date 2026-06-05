@@ -25,26 +25,54 @@ struct CaptureCue: View {
     var onSummon: () -> Void
     /// Height of any host bottom bar to lift above (0 ⇒ normal, with gradient).
     var avoidBottomInset: CGFloat = 0
+    /// Suppress the decorative paper-fade gradient even with no bottom bar. The
+    /// Living Chapter's `.conv` has NO `mask-image` in the design CSS, so its
+    /// timeline (lower chips, pencil, the "here" pin) must reach the card's
+    /// bottom edge at full opacity — the cue dot still rides at the foot, just
+    /// without the white wash that the conversational screens carry.
+    var suppressBottomFade: Bool = false
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// Whether the host has a bottom bar to clear (drops the gradient).
     private var hasBottomBar: Bool { avoidBottomInset > 0 }
+    /// Whether to draw the decorative paper-fade gradient at all.
+    private var showsFade: Bool { !hasBottomBar && !suppressBottomFade }
 
-    // Geometry from atlas-capture.css `.ac-summon` / `.ac-cue`.
+    // Geometry from atlas-capture.css `.ac-summon` / `.ac-cue`. The container
+    // height drives ONLY the dot's resting position (CSS `.ac-summon`
+    // height 78 / padding-bottom 17; `.ac-dot` bottom 7) — DO NOT shrink it or
+    // the cue dot drifts off the CSS-correct rest point on every screen.
     private var summonHeight: CGFloat { hasBottomBar ? 46 : 78 }
     private var bottomPadding: CGFloat { hasBottomBar ? 8 : 17 }
+
+    // The decorative paper-fade is the CSS `.ac-summon` background verbatim:
+    // `linear-gradient(180deg, rgba(255,255,255,0) 0%, var(--paper) 64%)` over the
+    // 78pt summon container. The `.conv` surfaces (Today/Brief/Review/Search) carry
+    // NO mask of their own, so this 78pt wash IS the only thing that dissolves
+    // content scrolling under the foot to paper.
+    //
+    // The prior 46pt / endpoint-0.7 wash was too short and too weak: the bottom-most
+    // Review HELD card (its pink HELD pill sits ~64pt above the screen bottom) read
+    // at FULL saturation in the sim, whereas the reference washes that pill to
+    // near-white (#FEFEFE) — see ref-review.png vs sim-review.png. Restore the
+    // CSS-authoritative 78pt height with the solid-paper point at 64% so content at
+    // the foot dissolves to paper exactly as the reference shows. (The `suppressBottomFade`
+    // chapter path is untouched — the chapter `.conv` has no wash by design.)
+    private var fadeHeight: CGFloat { 78 }
+    /// CSS `.ac-summon` gradient reaches solid `--paper` at 64% of its height.
+    private var fadeSolidPoint: CGFloat { 0.64 }
 
     var body: some View {
         // The decorative gradient container — NON-interactive. Only the cue dot
         // inside is tappable, so controls beneath the gradient stay reachable.
         ZStack(alignment: .bottom) {
-            if !hasBottomBar {
+            if showsFade {
                 LinearGradient(
                     colors: [Theme.Palette.paper.opacity(0), Theme.Palette.paper],
-                    startPoint: .top, endPoint: UnitPoint(x: 0.5, y: 0.66)
+                    startPoint: .top, endPoint: UnitPoint(x: 0.5, y: fadeSolidPoint)
                 )
-                .frame(height: summonHeight)
+                .frame(height: fadeHeight)
                 .allowsHitTesting(false)
             }
 
@@ -151,9 +179,18 @@ private struct CueDot: View {
     private var dotOpacity: Double {
         guard !reduceMotion else { return 0.9 }
         // The dot is a *living presence* — it brightens & rises on the breathe,
-        // but never vanishes completely. A calm opacity floor keeps it a
-        // persistent affordance (and means a static capture always shows it).
-        let floor = 0.42
+        // but never vanishes completely. A high opacity floor keeps the resting
+        // dot reading as saturated accent teal (#0089a8) rather than a pale cyan,
+        // so a static capture always shows the saturated accent (ref: the bottom
+        // timeline terminus / pagination dot).
+        //
+        // Measured: at floor 0.85 the 7px dot composited over the warm paper
+        // gradient read ~#299CB6 (too light/cyan) vs the ref ~#0889AA (= --teal
+        // #0089a8). Raised to 0.97 so the resting/captured frame reads as the
+        // saturated accent teal while the rise still fades visibly toward the
+        // top of the breathe. (The CSS dot is opacity 1 across its 16–58% hold;
+        // a near-1 floor keeps the resting hue true without flattening the loop.)
+        let floor = 0.97
         let p = Double(phase)
         let breathe: Double
         if p < 0.16 { breathe = floor + (1 - floor) * (p / 0.16) }     // fade in
@@ -164,12 +201,21 @@ private struct CueDot: View {
     }
 
     private var trailOpacity: Double {
-        guard !reduceMotion else { return 0.9 }
+        guard !reduceMotion else { return 0.6 }
+        // The vertical stem (`.ac-trail`) reads as a ~25px teal stem below the dot
+        // in the ref's resting frame. The pure CSS keyframe drops the trail to
+        // opacity 0 for the held 80–100% tail, so a static capture landing there
+        // showed NO stem. Keep a low floor (0.3) so the breathe still pulses the
+        // stem brighter/dimmer but it never fully vanishes — a captured frame
+        // always shows the stem, matching the reference.
+        let floor = 0.30
         let p = Double(phase)
-        if p < 0.24 { return 0.85 * (p / 0.24) }
-        if p < 0.66 { return 0.85 - (0.85 - 0.4) * (p - 0.24) / 0.42 }
-        if p < 0.80 { return 0.4 - 0.4 * (p - 0.66) / 0.14 }
-        return 0
+        let v: Double
+        if p < 0.24 { v = 0.85 * (p / 0.24) }
+        else if p < 0.66 { v = 0.85 - (0.85 - 0.4) * (p - 0.24) / 0.42 }
+        else if p < 0.80 { v = 0.4 - 0.4 * (p - 0.66) / 0.14 }
+        else { v = 0 }
+        return max(floor, v)
     }
 
     private var trailScaleY: CGFloat {

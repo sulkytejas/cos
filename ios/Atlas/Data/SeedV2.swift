@@ -28,13 +28,13 @@ enum SeedV2 {
         // 1. Karan — meeting prep
         let karanStructure = BriefStructure(sections: [
             .person(PersonData(
-                name: "Karan Mohla",
-                role: "Partner, Sequoia India",
+                name: "Karan Mehta",
+                role: "Partner · Sequoia India",
                 avatar: "KM",
                 facts: [
-                    "Led Series A in Mindtickle, Pixxel, Stoa.",
-                    "Background: founder, exited 2014.",
-                    "Writes a weekly memo on B2B SaaS retention.",
+                    "Led your A round at Visu in '22.",
+                    "Runs late — block 20 min, not 30.",
+                    "Asked at Soam dinner: \"show me month-6 retention.\"",
                 ],
                 mutual: [
                     .init(name: "A. Iyer", via: "IIT Bombay '15"),
@@ -45,9 +45,9 @@ enum SeedV2 {
                 title: "Your history with Karan",
                 items: [
                     .init(date: "2026·01·14", text: "Dinner at Soam. He asked you to keep him posted on retention.", subtle: nil),
-                    .init(date: "2026·03·02", text: "You sent the Q1 cohort numbers. He replied within an hour.", subtle: nil),
-                    .init(date: "2026·04·28", text: "A. introduced him formally as a partner candidate.", subtle: nil),
-                    .init(date: "2026·05·18", text: "You sent v3 of the deck. No reply yet.", subtle: true),
+                    .init(date: "2026·03·02", text: "Liked your tweet about the M6 cohort curve — first sign he reads them.", subtle: true),
+                    .init(date: "2026·04·11", text: "Coffee at Blue Tokai. He floated a $4M cheque, vague on terms.", subtle: nil),
+                    .init(date: "2026·05·18", text: "No reply yet to the data-room email from Friday.", subtle: true),
                 ]
             )),
             .prediction(PredictionData(
@@ -73,15 +73,21 @@ enum SeedV2 {
                 text: "He runs ten minutes late as a rule. Plan the meeting around twenty real minutes, not thirty. Lead with retention; the rest is buffer."
             )),
         ])
+        // The Brief surface binds to the most-recently-surfaced Brief (BriefScreen
+        // sorts by surfaceAt, reverse, .first). The Karan brief is the person-
+        // bearing one that matches the reference, so it must win — give it the
+        // latest surfaceAt; the Portrait/Trip briefs surface earlier.
+        let now = Date()
         context.insert(Brief(
             title: "Karan, in 90 minutes",
             situationDescription: "Second touch with Karan ahead of the seed round. He has v3 of the deck.",
             structureData: encode(karanStructure),
+            surfaceAt: now,
             chapter: stratyfix,
             chapterTitle: "Stratyfix seed round",
             relevance: "partner intro · second touch",
-            when: "today · 14:30",
-            drafted: "drafted 06:40",
+            when: "14:30",
+            drafted: "6 sources · email, voice memo, calendar, deck v3",
             preview: "Likely to push on retention. He runs late — plan for 20 minutes, not 30.",
             primaryAction: "Open deck v3",
             secondaryActions: ["Snooze 1h", "Ask Ayumi to dig deeper"]
@@ -134,11 +140,12 @@ enum SeedV2 {
             title: "Sitting for V., tomorrow 11:00",
             situationDescription: "Second sitting in V.'s commission, with three remaining. Studio moved.",
             structureData: encode(sittingStructure),
+            surfaceAt: now.addingTimeInterval(-3600),   // surfaces before Karan
             chapter: health,
             chapterTitle: "Portrait sitting",
             relevance: "second sitting · three left",
-            when: "Thu · 11:00 · Bandra studio",
-            drafted: "drafted 06:40",
+            when: "11:00",
+            drafted: "4 sources · calendar, email, voice memo, maps",
             preview: "She runs warm light all morning. Wear something matte, not pressed.",
             primaryAction: "Open route to studio",
             secondaryActions: ["Snooze", "Ask Ayumi to dig deeper"]
@@ -178,11 +185,12 @@ enum SeedV2 {
             title: "Three days until Varanasi",
             situationDescription: "Departure in 72 hours; trip arc Kainchi → Varanasi → Parvati Valley with a tight packing window.",
             structureData: encode(tripStructure),
+            surfaceAt: now.addingTimeInterval(-7200),   // surfaces before Karan
             chapter: trip,
             chapterTitle: "Varanasi + Parvati Valley",
             relevance: "T−3d",
-            when: "Sat · 06:30 departure",
-            drafted: "drafted 06:40",
+            when: "06:30",
+            drafted: "5 sources · email, calendar, drive, maps, weather",
             preview: "Pack list is light; cash and offline maps matter more than gear.",
             primaryAction: "Open packing list",
             secondaryActions: ["Snooze", "Ask Ayumi to dig deeper"]

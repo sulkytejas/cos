@@ -78,8 +78,15 @@ struct ChapterSection<Content: View>: View {
                 if let cite, let onCite {
                     Button(action: onCite) {
                         HStack(spacing: 5) {
+                            // CSS `.src-pill::before { width:4px; height:4px;
+                            // border:1px solid teal-deep }` with default content-box
+                            // sizing → 6px OUTER ring (4px content + 1px border each
+                            // side). SwiftUI's `strokeBorder` insets the stroke INSIDE
+                            // the frame, so a 4pt frame yields only a ~2pt hole (the
+                            // ring nearly fills). Use a 6pt frame so the visible outer
+                            // diameter matches the reference's hollow ring.
                             Circle().strokeBorder(Theme.Palette.tealDeep, lineWidth: 1)
-                                .frame(width: 4, height: 4)
+                                .frame(width: 6, height: 6)
                             Text(cite)
                                 .font(Theme.Font.mono(8))
                                 .tracking(0.8)

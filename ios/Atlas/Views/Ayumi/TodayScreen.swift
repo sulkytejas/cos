@@ -1,28 +1,15 @@
 import SwiftUI
-import SwiftData
 
 /// Today — the conversational home. One scrolling thread between the user and
 /// Ayumi (italic-serif voice, roman user bubbles), with embedded brief/action
 /// capsules that morph into letters, and a fixed compose bar.
 struct TodayScreen: View {
     @Environment(HaloController.self) private var halo
-    @Environment(\.modelContext) private var context
     @Environment(NavRouter.self) private var router
-    @Query(filter: #Predicate<Brief> { $0.statusRaw == "surfaced" },
-           sort: \.surfaceAt, order: .reverse) private var briefs: [Brief]
     @State private var rings: [EORingItem] = []
 
     private let space = "today.scroll"
 
-    /// DEBUG: `--today-demo` forces the seeded demo thread (the design-mock copy)
-    /// so the screen can be pixel-compared against the handout regardless of live data.
-    private var forceDemo: Bool {
-        #if DEBUG
-        ProcessInfo.processInfo.arguments.contains("--today-demo")
-        #else
-        false
-        #endif
-    }
     /// DEBUG: `--today-bottom` opens the thread scrolled to the foot (for shooting
     /// the bottom of the screen against the mock).
     private var scrollBottomDebug: Bool {
@@ -37,9 +24,19 @@ struct TodayScreen: View {
         ZStack(alignment: .bottom) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
+                    // The "while you slept" divider is the first conv element. Its
+                    // clearance from the app-mark comes entirely from the conv's
+                    // 70px top inset (set below) + the divider's own 14px top
+                    // margin — matching CSS, no extra top pad here.
                     DayDivider(label: "while you slept", roman: "02:14 → 06:38")
 
-                    if briefs.isEmpty || forceDemo {
+                    // Today is the conversational HOME — its handout is a scripted
+                    // exchange (Ayumi prose + src-tags, the user's reply, Ayumi's
+                    // thinking turn) that the flat `Brief` model cannot reconstruct
+                    // (briefs have no user/thinking turns and carry a "drafted HH:MM"
+                    // line the design never shows). So Today renders the design's
+                    // canonical thread verbatim; live briefs still populate the store
+                    // for the Brief screen, but do not drive this scripted home view.
                     AyumiTurn(when: "06:38",
                               paragraphs: [
                                 ayumiProse([
@@ -57,7 +54,8 @@ struct TodayScreen: View {
                               ],
                               source: "6 sources · email, voice memo, calendar, deck v3") {
                         BriefCapsule(glyph: "K", title: "Karan, in 90 minutes.", when: "14:30",
-                                     onOpen: { emitRing(); halo.setState(.delivered) })
+                                     onOpen: { emitRing(); halo.setState(.delivered) },
+                                     onOpenFull: { withAnimation(Theme.Motion.overshoot()) { router.go(.brief) } })
                     }
 
                     UserTurn(text: "thanks — anything else I should know before the call?", when: "07:15")
@@ -81,24 +79,12 @@ struct TodayScreen: View {
                         BriefCapsule(glyph: "S", title: "Swap the churn slide", when: "5 min",
                                      onOpen: { emitRing(); halo.setState(.delivered) })
                     }
-                    } else {
-                        ForEach(Array(briefs.prefix(4))) { b in
-                            AyumiTurn(when: b.when ?? "today",
-                                      paragraphs: [ayumiProse([.init(b.preview ?? b.relevance ?? b.situationDescription)], size: 17)],
-                                      source: b.drafted) {
-                                BriefCapsule(glyph: String(b.title.prefix(1)).uppercased(),
-                                             title: b.title, when: b.when ?? "",
-                                             onOpen: { emitRing(); halo.setState(.delivered) },
-                                             onOpenFull: { withAnimation(Theme.Motion.overshoot()) { router.go(.brief) } })
-                            }
-                        }
-                    }
 
                     DayDivider(label: "now", roman: "09:41")
-                    Spacer().frame(height: 76)   // CSS .conv bottom inset 60 + padding 16
+                    Spacer().frame(height: 16)   // CSS .conv padding-bottom 16
                 }
                 .padding(.horizontal, 22)
-                .padding(.top, 60)               // app-mark(pageTop+30) → divider ≈ +38px gap
+                .padding(.top, 6)                // CSS .conv padding-top 6
             }
             .coordinateSpace(name: space)
             .scrollDismissesKeyboard(.interactively)
@@ -106,8 +92,23 @@ struct TodayScreen: View {
             // The page already sits below the Dynamic Island (PageShell insets it
             // within the safe area). Without this the ScrollView ADDS the safe-area
             // inset a second time, pushing the whole thread ~59px down — the "huge"
-            // top gap. Our explicit .padding(.top, 76) now positions content exactly.
+            // top gap.
             .ignoresSafeArea(.container, edges: .top)
+            // CSS `.conv { inset: 70px 0 60px 0 }` — the scroll viewport is inset
+            // inside the page, which itself sits `var(--halo-inset)=22px` below the
+            // physical top. Because `.ignoresSafeArea(.top)` measures this padding
+            // from the PHYSICAL top (not the page), the conv top inset is the SUM:
+            // page-top(22) + conv-inset(70) = 92. But the divider's own clearance
+            // ALSO comes from the VStack top pad (6) + DayDivider's vpad (14) on top
+            // of that — so 92 here placed the first "while you slept" divider ~18pt
+            // too low. The earlier haloInset+52 = 74 over-corrected the OTHER way:
+            // the "while you slept" divider (and the whole feed below it) sat ~3.5pt
+            // too LOW vs the ref, accumulating into a ~9pt drift at the bottom cue.
+            // haloInset+48 = 70 lands on the CSS `.conv` inset exactly and lifts the
+            // divider ~4pt to match the ref, while still clearing the app-mark
+            // (which the shell pins at haloInset+30=52pt).
+            .padding(.top, Theme.Layout.haloInset + 48)   // 22 + 48 = 70 (CSS .conv inset)
+            .padding(.bottom, 60)
 
             // v0.7: the bottom compose pill was removed — it was redundant with
             // the global Capture cue (mounted in PageShell). Today now reaches
@@ -149,11 +150,16 @@ private struct AyumiTurn<Embed: View>: View {
         // CSS: `.turn { padding: 10px 0 14px 18px }` — 18px left gutter = the
         // 12px avatar/thread column + 6px spacing.
         HStack(alignment: .top, spacing: 6) {
-            // thread line + avatar (CSS: 1px line, teal-deep→rule, opacity .7)
+            // thread line + avatar. CSS `.turn.ayumi::before { width: 1px;
+            // background: linear-gradient(#00576B 0%, rgba(40,44,52,.1) 100%) }`:
+            // the rail starts FULL-strength deep teal at the avatar (reading like
+            // an inked stroke) and dissolves to a 10% neutral-ink whisper at its
+            // foot — not the teal→teal fade a previous pass used, which kept the
+            // foot tinted and lost the stroke-like top.
             VStack(spacing: 6) {
                 AyumiAvatar(size: 12)
                 Rectangle()
-                    .fill(LinearGradient(colors: [Theme.Palette.tealDeep.opacity(0.7), Theme.Palette.rule],
+                    .fill(LinearGradient(colors: [Color(hex: 0x00576B), Color(hex: 0x282C34).opacity(0.10)],
                                          startPoint: .top, endPoint: .bottom))
                     .frame(width: 1)
                     .frame(maxHeight: .infinity)
@@ -169,10 +175,20 @@ private struct AyumiTurn<Embed: View>: View {
 
                 // CSS: `.body { font-size:17px; line-height:1.46 }`, paragraphs
                 // separated by `p + p { margin-top: 8px }` (NOT a blank line).
+                // Instrument Serif's natural line height at 17pt is ~22.1pt, so the
+                // CSS pitch of 17×1.46≈24.8pt needs lineSpacing ≈ 24.8−22.1 = 2.7pt.
+                // The prior `lineSpacing(4)` rendered ~26.1pt pitch (~1.3pt too tall
+                // per line), which loosened the prose and pushed the whole feed down.
+                // Paragraph gap: CSS adds the 8px margin between 24.82px line
+                // BOXES (text + half-leading each side); SwiftUI stacks the font's
+                // NATURAL bounds (~22.1pt), so the 2.7pt of leading evaporates at
+                // every boundary. spacing = 8 + 2.7 ≈ 10.7 restores the CSS pitch
+                // (measured: ref 33.3pt baseline-to-baseline across the break,
+                // sim was 29.3pt at spacing 8).
                 if !paragraphs.isEmpty {
-                    VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 10.7) {
                         ForEach(Array(paragraphs.enumerated()), id: \.offset) { _, p in
-                            p.lineSpacing(4).fixedSize(horizontal: false, vertical: true)
+                            p.lineSpacing(2.7).fixedSize(horizontal: false, vertical: true)
                         }
                     }
                 }
@@ -185,8 +201,8 @@ private struct AyumiTurn<Embed: View>: View {
 
                 if let source {
                     Text(source)
-                        .font(Theme.Font.mono(9.5))
-                        .tracking(0.5)
+                        .font(Theme.Font.mono(9))   // .src-tag { font-size: 9px }
+                        .tracking(0.54)             // 0.06em × 9px
                         .foregroundStyle(Theme.Palette.ink4)
                         .padding(.top, 8)   // .src-tag { margin-top: 8px }
                 }
@@ -211,6 +227,14 @@ private struct ThinkingLine: View {
             Circle()
                 .fill(Theme.Palette.jade)
                 .frame(width: 7, height: 7)
+                // CSS .thinking-pulse::after { inset:-4px } — a soft jade halo
+                // (radial 0.45→0 at 70%) breathing in sync with the dot.
+                .background(
+                    Circle()
+                        .fill(RadialGradient(colors: [Theme.Palette.jade.opacity(0.45), Theme.Palette.jade.opacity(0)],
+                                             center: .center, startRadius: 0, endRadius: 7.5))
+                        .frame(width: 15, height: 15)
+                )
                 .scaleEffect(on ? 1.18 : 1.0)
                 .opacity(on ? 1 : 0.55)
                 .alignmentGuide(.firstTextBaseline) { d in d[.bottom] - 1 }
@@ -239,9 +263,31 @@ private struct UserTurn: View {
                 Text("YOU").font(Theme.Font.mono(9.5)).tracking(1.5).foregroundStyle(Theme.Palette.ink3)
             }
             Text(text)
-                .font(Theme.Font.sans(15.5))
+                // CSS .turn.user .bubble { font-family: var(--sans)=Manrope; font-size: 14.5px }.
+                // Reference the Manrope FAMILY name directly rather than the
+                // `Manrope-Regular` named-instance PS name: on the iOS sim the
+                // bundled variable font does NOT expose the fvar instance PS
+                // names, so `.custom("Manrope-Regular")` (what `Theme.Font.sans`
+                // resolves to) silently falls back to the system sans — a WIDER
+                // face that wraps line 1 one word early ("…I" instead of
+                // "…I should"). The family name resolves to Manrope's Regular
+                // default and renders at the correct (narrower) advance.
+                .font(.custom(Theme.Typeface.sansFamily, size: 14.5))
+                .tracking(0)                   // default/zero tracking — CSS sets none
                 .foregroundStyle(.white)
-                .lineSpacing(3)
+                // CSS `line-height: 1.4` at 14.5px ≈ 20.3pt line pitch. Manrope's
+                // natural pitch at 14.5pt is already ≈1.4, so add no extra leading
+                // (the prior `lineSpacing(3)` loosened it to ~1.6 → bubble too tall).
+                .lineSpacing(0)
+                // Lay the text out at a fixed text width so it wraps exactly like
+                // the design ("…anything else I should / know before the call?").
+                // CSS caps the bubble at `max-width: 78%`; on-device the conv content
+                // width measures ~305pt, so the bubble maxes at 0.78×305 ≈ 238pt and
+                // the text window is 238 − 28pt h-padding ≈ 210pt. The ref renders the
+                // bubble exactly at this cap (L=111pt, R=349pt, W=238pt) with line 1
+                // "…anything else I should" reaching the full width. The prior 220pt
+                // overshot it by ~10pt, pushing line 1 past the ref's right edge.
+                .frame(width: 210, alignment: .leading)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
                 .background(
@@ -249,7 +295,6 @@ private struct UserTurn: View {
                                            bottomTrailingRadius: 4, topTrailingRadius: 18, style: .continuous)
                         .fill(Theme.Palette.ink)
                 )
-                .frame(maxWidth: 248, alignment: .trailing)
                 .shadow1()
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
@@ -317,10 +362,13 @@ private struct BriefCapsule: View {
 
             // Title fills (and truncates) when the capsule stretches; the short
             // time meta keeps its intrinsic width so it always stays readable.
+            // Collapsed, the row hugs its content (CSS `width: fit-content`): the
+            // only gap between label and time is the HStack's 10pt spacing, which
+            // matches CSS `.atom-capsule { gap: 10px }`. An earlier extra 12pt
+            // spacer here doubled that gap and stretched the pill ~22pt too wide.
             Text(title).font(Theme.Font.serifItalic(15)).foregroundStyle(Theme.Palette.ink)
                 .lineLimit(1).truncationMode(.tail)
                 .frame(maxWidth: stretch ? .infinity : nil, alignment: .leading)
-            if !stretch { Spacer().frame(width: 12) }
             if !meta.isEmpty {
                 Text(meta).font(Theme.Font.mono(9.5)).tracking(0.4).foregroundStyle(Theme.Palette.tealDeep)
                     .lineLimit(1).fixedSize()

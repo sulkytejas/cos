@@ -59,7 +59,7 @@ export async function seedIfEmpty() {
         startDate: "2026-05-01",
         endDate: "2026-08-15",
         purpose:
-          "Close $1.5M seed before MBA starts. Maintain CEO role remotely post-move.",
+          "Karan at 14:30 today. Six notes this month; the open question is month-6 retention.",
       },
       {
         id: health,

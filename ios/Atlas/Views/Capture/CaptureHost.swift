@@ -23,6 +23,10 @@ struct CaptureHost<Content: View>: View {
     var halo: HaloController
     /// Lift the cue above a host bottom bar of this height (0 ⇒ normal).
     var avoidBottomInset: CGFloat = 0
+    /// Drop the cue's decorative paper-fade gradient (Living Chapter: its
+    /// `.conv` has no `mask-image`, so the timeline must reach the card bottom
+    /// at full opacity).
+    var suppressBottomFade: Bool = false
 
     @State private var controller = CaptureController()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -49,7 +53,8 @@ struct CaptureHost<Content: View>: View {
             if !controller.open {
                 CaptureCue(
                     onSummon: { open() },
-                    avoidBottomInset: avoidBottomInset
+                    avoidBottomInset: avoidBottomInset,
+                    suppressBottomFade: suppressBottomFade
                 )
                 .transition(.opacity)
             }

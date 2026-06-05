@@ -6,13 +6,20 @@ import QuartzCore
 /// canonical vanilla Canvas-2D engine in the design handoff). Ayumi's presence
 /// as a single luminous "thought" that lives in the rim around the screen.
 ///
-/// One material, three states:
+/// One material, four states:
 ///   • `.idle`      — nothing; the line decays to rest and the trail fades (~2.6s).
 ///   • `.thinking`  — a jade inhale bloom, then a wandering luminous line (a journey).
 ///   • `.delivered` — the whole rim blooms gold at once, then exhales (~2.1s) → idle.
+///   • `.settled`   — Ayumi's resting PRESENCE while an answer is on screen: a
+///                    steady, NON-pulsing uniform warm-gold rim on all four edges
+///                    (no envelope, no bloom). It does not auto-decay; it holds
+///                    until the screen explicitly calls `.idle` (answer dismissed).
+///                    The Search reference measures this rim ≈ #F1EADC uniformly
+///                    around the 22pt rim while a RAG answer is present.
 ///
-/// Public API mirrors the JS exactly: `halo.setState(.idle | .thinking | .delivered)`.
-/// `.delivered` auto-settles back to `.idle` after ~2.1s.
+/// Public API mirrors the JS exactly: `halo.setState(.idle | .thinking | .delivered)`,
+/// plus `.settled` for the persistent answer-present presence.
+/// `.delivered` auto-settles back to `.idle` after ~2.1s; `.settled` persists.
 ///
 /// FAITHFULNESS NOTES — do not "optimize" these away; they preserve the tuned feel:
 ///   • The engine advances at a FIXED ~32ms timestep (driven by `HaloView`). Every
@@ -25,7 +32,7 @@ import QuartzCore
 @MainActor
 @Observable
 final class HaloController {
-    enum HaloState: Hashable { case idle, thinking, delivered }
+    enum HaloState: Hashable { case idle, thinking, delivered, settled }
 
     /// Observed — drives `HaloView`'s pause/resume gating (the resume trigger).
     private(set) var stateName: HaloState = .idle
@@ -74,6 +81,15 @@ final class HaloController {
     /// Path inset from the canvas edge — the rail the thought travels on.
     let rimInset: Double
 
+    /// Corner radius of the rail (and rim hairlines). The JS reference runs in a
+    /// square-cornered browser rect, but the device display rounds its corners
+    /// (~55pt), which clips anything parked in a square corner into a visible
+    /// warm wedge. Concentric with the page card (radius 32 @ inset 22) so the
+    /// rim band reads uniform around the corner curve: 32 + (22 − rimInset).
+    var rimCornerRadius: Double {
+        Double(Theme.Layout.pageRadius) + (Double(Theme.Layout.haloInset) - rimInset)
+    }
+
     init(rimInset: Double = 11) {
         self.rimInset = rimInset
         trail.reserveCapacity(128)
@@ -103,6 +119,10 @@ final class HaloController {
     }
 
     /// True when there is nothing left to animate — `HaloView` parks the timeline.
+    /// `.settled` is NOT at rest: it must keep painting its steady gold presence
+    /// rim every tick (the rim is static, so this reads as a held glow), exactly as
+    /// `.delivered` keeps rendering until it auto-settles. Only `.idle` (with no
+    /// residual trail/bloom) parks the GPU.
     var isAtRest: Bool {
         stateName == .idle && trail.isEmpty && deliveredAt == 0 && thinkingAt == 0
     }
@@ -116,21 +136,47 @@ final class HaloController {
     }
 
     // MARK: - Perimeter path + perturbation — JS rimPath(t)
+    // Unlike the square-cornered JS rail, the rail arcs around the corners
+    // (radius `rimCornerRadius`) so the thought never parks inside the device's
+    // clipped corner curve (which rendered as a stray warm wedge at each corner).
     private func rimPoint(_ t: Double, size: CGSize, now: Double) -> CGPoint {
         let W = Double(size.width), H = Double(size.height)
         let w = W - 2 * rimInset
         let h = H - 2 * rimInset
-        let perim = 2 * (w + h)
+        let R = min(rimCornerRadius, min(w, h) / 2)
+        let sw = w - 2 * R                           // straight run, top/bottom
+        let sh = h - 2 * R                           // straight run, left/right
+        let arc = .pi * R / 2                        // quarter-corner length
+        let perim = 2 * (sw + sh) + 4 * arc
         let u = (t.truncatingRemainder(dividingBy: 1) + 1).truncatingRemainder(dividingBy: 1) * perim
         var x = 0.0, y = 0.0, nx = 0.0, ny = 0.0
-        if u < w {                                   // top edge, L→R
-            x = rimInset + u;                y = rimInset;                     nx = 0;  ny = 1
-        } else if u - w < h {                        // right edge, T→B
-            x = W - rimInset;                y = rimInset + (u - w);           nx = -1; ny = 0
-        } else if u - w - h < w {                    // bottom edge, R→L
-            x = W - rimInset - (u - w - h);  y = H - rimInset;                 nx = 0;  ny = -1
-        } else {                                     // left edge, B→T
-            x = rimInset;                    y = H - rimInset - (u - 2*w - h); nx = 1;  ny = 0
+        // Inward normal on an arc points from the rail at angle `a` toward the
+        // corner's center, matching the straight edges' inward normals.
+        func corner(_ cx: Double, _ cy: Double, _ a0: Double, _ s: Double) {
+            let a = a0 + s / R
+            x = cx + cos(a) * R; y = cy + sin(a) * R
+            nx = -cos(a);        ny = -sin(a)
+        }
+        // Cumulative segment boundaries, clockwise from the top-left arc's end:
+        // top → TR arc → right → BR arc → bottom → BL arc → left → TL arc.
+        let b1 = sw, b2 = b1 + arc, b3 = b2 + sh, b4 = b3 + arc
+        let b5 = b4 + sw, b6 = b5 + arc, b7 = b6 + sh
+        if u < b1 {                                  // top edge, L→R
+            x = rimInset + R + u;            y = rimInset;                     nx = 0;  ny = 1
+        } else if u < b2 {                           // top-right corner
+            corner(W - rimInset - R, rimInset + R, -.pi / 2, u - b1)
+        } else if u < b3 {                           // right edge, T→B
+            x = W - rimInset;                y = rimInset + R + (u - b2);      nx = -1; ny = 0
+        } else if u < b4 {                           // bottom-right corner
+            corner(W - rimInset - R, H - rimInset - R, 0, u - b3)
+        } else if u < b5 {                           // bottom edge, R→L
+            x = W - rimInset - R - (u - b4); y = H - rimInset;                 nx = 0;  ny = -1
+        } else if u < b6 {                           // bottom-left corner
+            corner(rimInset + R, H - rimInset - R, .pi / 2, u - b5)
+        } else if u < b7 {                           // left edge, B→T
+            x = rimInset;                    y = H - rimInset - R - (u - b6);  nx = 1;  ny = 0
+        } else {                                     // top-left corner
+            corner(rimInset + R, rimInset + R, .pi, u - b7)
         }
         let perp = smoothNoise(now, 0.0) * 22 * wanderAmp     // along the outward normal
         let tang = smoothNoise(now, 5.7) * 18 * wanderAmp     // along the tangent
@@ -161,6 +207,12 @@ final class HaloController {
                 deliveredAt = 0
                 pendingIdle = true
             }
+        case .settled:
+            // Steady presence: no roaming, no bloom envelope. Just hold the rim
+            // quiet so the trail decays and only the static gold rim (painted in
+            // `render`) remains.
+            target = 0
+            wanderAmp += (0.12 - wanderAmp) * Self.deliverWanderSmooth
         case .idle:
             target = 0
             wanderAmp += (1 - wanderAmp) * Self.smooth
@@ -208,7 +260,8 @@ final class HaloController {
             let r = CGRect(x: rimInset, y: rimInset,
                            width: Double(size.width) - 2 * rimInset,
                            height: Double(size.height) - 2 * rimInset)
-            ctx.stroke(Path(r), with: .color(Color(.sRGB, red: 0, green: 0.537, blue: 0.659, opacity: 0.85)), lineWidth: 2)
+            ctx.stroke(Path(roundedRect: r, cornerRadius: rimCornerRadius, style: .continuous),
+                       with: .color(Color(.sRGB, red: 0, green: 0.537, blue: 0.659, opacity: 0.85)), lineWidth: 2)
         }
 
         // The wandering thought: three stacked strokes over the aging trail.
@@ -236,6 +289,47 @@ final class HaloController {
                       attack: 0.35, eScale: 0.7, bandBase: 8, bandGrow: 20,
                       stripColor: Self.jadeBloom, stripAlpha: 0.5, hairline: false)
         }
+
+        // Settled presence: a STEADY uniform warm-gold rim (no envelope, no
+        // breathing) on all four edges while an Ayumi answer is on screen. Search's
+        // reference measures the rim ≈ #F1EADC uniformly around the 22pt rim. Paint
+        // a constant-alpha gold band over the full rim width + the pale gold rim
+        // hairline, so the composited rim over paper-deep (#F7F7F5) reads warm-gold.
+        if stateName == .settled {
+            drawSettledRim(&ctx, size: size)
+        }
+    }
+
+    /// The steady gold presence rim for `.settled`: a uniform constant-alpha gold
+    /// fill across the full rim width on all four edges + the pale gold hairline.
+    /// No envelope — it does not breathe; it holds until `.idle`.
+    private func drawSettledRim(_ ctx: inout GraphicsContext, size: CGSize) {
+        let W = Double(size.width), H = Double(size.height)
+        // The page card masks everything inboard of `haloInset` (22pt); fill the
+        // full rim so the band reads uniform right up to the card edge.
+        let band = Double(22)
+        // Tuned so goldBloom (212,172,96) over paper-deep (#F7F7F5) composites to
+        // ≈ #F1EADC (the soft cream the design reference measures, ~#F2EDE1). A flat
+        // fill (location 0→1 same alpha) keeps it uniform, unlike the bloom strips
+        // which fade inward. At the previous a=0.30 the composite read #ECE0C8 — a
+        // deeper, over-saturated gold (sim measured #EEE3C9) than the reference.
+        let a = 0.17
+        // One even-odd ring fill (full canvas minus the page card's rounded rect)
+        // instead of four overlapping edge strips: the strips double-composited at
+        // the corners (0.17 → ~0.31), and the display's rounded corner clipped the
+        // darker square into a visible warm wedge. The ring hugs the card's exact
+        // corner curve so the band reads uniform everywhere.
+        var ring = Path()
+        ring.addRect(CGRect(x: 0, y: 0, width: W, height: H))
+        ring.addRoundedRect(in: CGRect(x: band, y: band, width: W - 2 * band, height: H - 2 * band),
+                            cornerSize: CGSize(width: Double(Theme.Layout.pageRadius),
+                                               height: Double(Theme.Layout.pageRadius)),
+                            style: .continuous)
+        ctx.fill(ring, with: .color(Self.goldBloom.opacity(a)), style: FillStyle(eoFill: true))
+        // Pale gold rim hairline, low constant alpha — rounded concentric with the card.
+        let rimRect = CGRect(x: rimInset, y: rimInset, width: W - 2 * rimInset, height: H - 2 * rimInset)
+        ctx.stroke(Path(roundedRect: rimRect, cornerRadius: rimCornerRadius, style: .continuous),
+                   with: .color(Self.goldHair.opacity(0.28)), lineWidth: 1.4)
     }
 
     private func strokeTrail(_ ctx: inout GraphicsContext, now: Double,
@@ -277,16 +371,20 @@ final class HaloController {
             ctx.fill(Path(rect), with: .linearGradient(
                 grad, startPoint: CGPoint(x: gx0, y: gy0), endPoint: CGPoint(x: gx1, y: gy1)))
         }
+        // Side strips stop short of the top/bottom bands so the corners are
+        // painted exactly once (overlap doubled the alpha into a warm corner
+        // wedge under the device's rounded corner clip).
         strip(0, 0, W, band, 0, 0, 0, band)             // top  — bright at edge, fading inward
         strip(0, H - band, W, H, 0, H, 0, H - band)     // bottom
-        strip(0, 0, band, H, 0, 0, band, 0)             // left
-        strip(W - band, 0, W, H, W, 0, W - band, 0)     // right
+        strip(0, band, band, H - band, 0, 0, band, 0)   // left
+        strip(W - band, band, W, H - band, W, 0, W - band, 0)  // right
 
         if hairline {
             // JS applies globalAlpha=e to this rim stroke (strips already baked e),
-            // so the effective alpha is 0.7·e².
+            // so the effective alpha is 0.7·e². Rounded concentric with the card.
             let rimRect = CGRect(x: rimInset, y: rimInset, width: W - 2 * rimInset, height: H - 2 * rimInset)
-            ctx.stroke(Path(rimRect), with: .color(Self.goldHair.opacity(0.7 * e * e)), lineWidth: 1.4)
+            ctx.stroke(Path(roundedRect: rimRect, cornerRadius: rimCornerRadius, style: .continuous),
+                       with: .color(Self.goldHair.opacity(0.7 * e * e)), lineWidth: 1.4)
         }
     }
 

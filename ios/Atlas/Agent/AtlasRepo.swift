@@ -1146,18 +1146,21 @@ enum NorthIndiaSeed {
 
     // ── Stops (route) ────────────────────────────────────────────────
     static let stops: [Stop] = [
-        Stop(id: "delhi", place: "Delhi", dates: "18–19 May",
+        Stop(id: "delhi", place: "Delhi", dates: "May 30 · DEL",
              note: "Landed IndiGo 6E-2043, overnight near the airport before heading up to the hills.",
-             mini: "Landed, one night near the airport.",
+             mini: "Landed · cab held · 40 min on the ground.",
              state: .done, provenance: [.booked], collapsed: true),
-        Stop(id: "nainital", place: "Nainital", dates: "19–22 May",
+        Stop(id: "nainital", place: "Nainital", dates: "May 30 – Jun 2",
              note: "Three nights by the lake. Boating at Naini, the Mall Road evenings, a day up to Tiffin Top.",
-             mini: "Three nights by the lake.",
+             mini: "3 nights by the lake · Tiffin Top at dawn.",
              state: .done, provenance: [.inferred, .live], collapsed: true),
-        Stop(id: "rishikesh", place: "Rishikesh", dates: "22–27 May",
-             note: "The reason for the trip. Ganga aarti at Triveni Ghat, a morning at the Beatles Ashram, and the river itself. You’re here now, on day 5.",
-             mini: "Day 5 — you’re here.",
-             state: .here, provenance: [.live], collapsed: false),
+        Stop(id: "rishikesh", place: "Rishikesh", dates: "Jun 2 – 6 · now",
+             note: "You're here. Ganga aarti tonight at Parmarth — I set a 6:15 nudge.",
+             mini: "Day 5 — you're here.",
+             // No provenance chip on the active stop — the reference `.here` stop
+             // shows only the "YOU'RE HERE · MAPS" / "STAY ENDS JUN 6" action tags,
+             // not a standalone 'LIVE' know-chip (StopRow renders those tags).
+             state: .here, provenance: [], collapsed: false),
         Stop(id: "kasol", place: "Kasol", dates: "27–29 May",
              note: "I added this — you searched “Kheerganga trek” twice in April. Two nights in Parvati Valley, the obvious base for the trek.",
              mini: "Inferred from your searches.",
@@ -1179,8 +1182,8 @@ enum NorthIndiaSeed {
         // Deliberately WRONG seed — the correction target (README §A).
         Leg(id: "leg-nainital", mode: "Flew to Pantnagar", why: "Quickest hop off the plains — a short flight, then the climb up.",
             fare: "₹4,900", booked: true, fromStop: "delhi", toStop: "nainital"),
-        Leg(id: "leg-rishikesh", mode: "Drove down via Kathgodam", why: "Overnight like your Manali run — saved a day on the road.",
-            fare: "₹3,200", booked: true, fromStop: "nainital", toStop: "rishikesh"),
+        Leg(id: "leg-rishikesh", mode: "Shared taxi · Nainital → Rishikesh", why: "Overnight like your Manali run — saved a day on the road.",
+            fare: "₹2,100", booked: true, fromStop: "nainital", toStop: "rishikesh"),
         // Unbooked suggestion — profile-tuned reasoning (README §"The route").
         Leg(id: "leg-kasol", mode: "Overnight to Bhuntar, cab to Kasol", why: "You get carsick on switchbacks — I’d split it overnight at Bhuntar, then a short cab in.",
             fare: "", booked: false, fromStop: "rishikesh", toStop: "kasol"),
@@ -1302,10 +1305,10 @@ enum NorthIndiaSeed {
     static let northIndia = Trip(
         id: "north",
         title: "North India",
-        dateRange: "18–30 May · 5 stops · day 5",
-        meta: "built from 1 email · watching 4 sources",
-        framing: "You gave me one flight confirmation. From that, I built the whole trip — and I’m still watching it unfold.",
-        framingAccent: "built the whole trip",
+        dateRange: "May 30 – Jun 11 | Nainital · Rishikesh · Kasol",
+        meta: "opened this thread · 1 source",
+        framing: "You forwarded one flight confirmation — Delhi in, Chandigarh out. I inferred the rest: five stops, twelve days. You're on day 5, in Rishikesh, and two legs still aren't booked.",
+        framingAccent: "day 5",
         stops: stops, legs: legs, spend: spend,
         recommendations: recommendations, tracking: tracking,
         connectors: connectors, receipts: receipts,

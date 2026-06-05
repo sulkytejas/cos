@@ -23,13 +23,27 @@ func ayumiProse(_ runs: [ProseRun], size: CGFloat, color: Color = Theme.Palette.
         case .italic: a.font = .custom(Theme.Typeface.serifItalic, size: size)
         case .roman:  a.font = .custom(Theme.Typeface.serifRegular, size: size)
         case .accent:
-            // The mock's `em.accent` is a teal highlighter *band* anchored to the
-            // bottom of the line (gradient transparent→0.16 teal across the lower
-            // ~28%), not a full-height box. SwiftUI can't draw a partial-height
-            // inline background, so render the bottom-anchored intent as a teal
-            // underline-marker (roman glyphs sitting over a teal baseline stroke).
+            // The mock's `em.accent` is a teal highlighter *band* on the LOWER part
+            // of the line, not a full-height box: CSS `background: linear-gradient(
+            // 180deg, transparent 65%, rgba(0,137,168,0.18) 65% → 92%, transparent
+            // 92%)` — rgba(0,137,168,0.18) (= teal.opacity(0.18)) across only the
+            // lower ~27% of the line height (65%→92%), bottom-anchored.
+            //
+            // SwiftUI's inline AttributedString background can only fill the FULL
+            // glyph box — there is no partial-height inline fill, and a pixel-exact
+            // bottom-anchored band requires a view-/layout-based renderer with
+            // per-word glyph-rect measurement, which would have to replace AyumiTurn's
+            // shared `[Text]` paragraph contract across Today/Brief/Review/Search
+            // (a large, wrap-correctness-risky migration not safe for this serial
+            // shared-file pass — deferred to a dedicated pass). As the faithful,
+            // contained stand-in inside the `Text` API, render a full-height wash
+            // whose INTEGRATED teal coverage matches the reference band: 0.18 over
+            // the lower 27% of the line ≈ 0.049 full-height-equivalent. The prior
+            // 0.14 full-height wash laid down ~3× the reference's teal pixels (scan:
+            // sim 20872 vs ref 7087); drop it to 0.06 so the accent reads as a pale
+            // teal mark of the right total weight rather than a heavy full-height box.
             a.font = .custom(Theme.Typeface.serifRegular, size: size)
-            a.underlineStyle = Text.LineStyle(pattern: .solid, color: Theme.Palette.teal.opacity(0.5))
+            a.backgroundColor = Theme.Palette.teal.opacity(0.06)
         }
         a.foregroundColor = color
         out += a
@@ -75,26 +89,49 @@ struct AyumiAvatar: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        // CSS `.turn.ayumi .turn-meta::before` is a 12px dark INK disc
+        // (`background: var(--ink)` #0d141a) with a SMALL contained jade glow drawn by
+        // `::after`: a 6px circle at `left:1px; top:9px` (the lower-left quadrant, NOT
+        // the whole disc), `radial-gradient(circle at 35% 30%, rgba(122,214,198,0.95)
+        // [pulseTeal], rgba(90,143,116,0.5) 60% [jade], transparent 100%)`, breathing
+        // via `@keyframes gentle { 0%,100%{opacity:.4} 50%{opacity:1} }` over 2.4s.
+        //
+        // Per-pixel scan of the full-res Today reference dot (x[124–156], y[450–481]
+        // @3x): the disc interior is mostly `--ink` (green channel ≈ 20, i.e. #0d141a)
+        // with a teal glow whose bright core sits at the disc's lower-CENTER, ≈(0.5,
+        // 0.55) normalized, ~size*0.2 across, fading out by ~size*0.4. The prior glow
+        // (endRadius size*0.6 centred 0.35/0.30) covered the WHOLE disc, so the dot
+        // read as a uniformly dark-jade ball with the ink base lost. Shrink the radial
+        // to a small lower-left-of-centre glow over the predominantly near-black ink.
+        let glowCenter = UnitPoint(x: 0.42, y: 0.58)   // lower-left-of-centre (CSS ::after at left:1/top:9, clipped)
+        let glowEnd = size * 0.40                        // 6px glow on a 12px dot ≈ contained ~0.4·size, not full-disc
         Circle()
-            .fill(Theme.Palette.obsidian)
+            .fill(Theme.Palette.obsidian)               // --ink base #0d141a (obsidian gradient)
             .frame(width: size, height: size)
-            .overlay(
-                // catchlight
-                Circle()
-                    .fill(RadialGradient(colors: [Theme.Palette.avatarInk.opacity(0.5), .clear],
-                                         center: UnitPoint(x: 0.32, y: 0.28), startRadius: 0, endRadius: size * 0.5))
-            )
             .overlay {
                 if pulse {
                     Circle()
-                        .fill(RadialGradient(colors: [Theme.Palette.pulseTeal.opacity(0.95), Theme.Palette.jade.opacity(0.0)],
-                                             center: .center, startRadius: 0, endRadius: size * 0.5))
-                        .frame(width: size * 0.5, height: size * 0.5)
+                        .fill(RadialGradient(
+                            colors: [Theme.Palette.pulseTeal.opacity(0.95),
+                                     Theme.Palette.jade.opacity(0.5), .clear],
+                            center: glowCenter,
+                            startRadius: 0, endRadius: glowEnd))
                         .opacity(on ? 1 : 0.4)
+                } else {
+                    // Non-breathing variant keeps the same contained static glow so
+                    // non-pulse call sites still read as a dark ink dot with a small
+                    // jade highlight rather than a flat black dot.
+                    Circle()
+                        .fill(RadialGradient(
+                            colors: [Theme.Palette.pulseTeal.opacity(0.95),
+                                     Theme.Palette.jade.opacity(0.5), .clear],
+                            center: glowCenter,
+                            startRadius: 0, endRadius: glowEnd))
                 }
             }
             .onAppear {
                 guard pulse, !reduceMotion else { return }
+                // `@keyframes gentle`: opacity 0.4 ↔ 1 over 2.4s, ease-in-out.
                 withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true)) { on = true }
             }
     }
@@ -211,8 +248,16 @@ struct CiteButton: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 5) {
-                Circle().stroke(tint, lineWidth: 1).frame(width: 4, height: 4)
-                Text(label).font(Theme.Font.mono(9)).tracking(0.6).foregroundStyle(tint)
+                // CSS `.cite` is `font-size:9px; color:var(--teal-deep)` at the mono
+                // default weight, but JetBrainsMono at 9pt regular anti-aliases to a
+                // washed pale gray-teal in the sim (darkest core ~RGB(105,156,168))
+                // vs the reference's crisp #00576b (RGB 0,87,107). The color token is
+                // already correct (tealDeep == #00576b) and there is no dimming — the
+                // washout is purely the thin 9pt regular strokes. Bump the mono weight
+                // to .medium so the heavier strokes reach full teal-deep coverage and
+                // match the reference's bolder-looking cite glyphs (ref-strip0).
+                Circle().stroke(tint, lineWidth: 1.2).frame(width: 4, height: 4)
+                Text(label).font(Theme.Font.mono(9, weight: .medium)).tracking(0.6).foregroundStyle(tint)
             }
         }
         .buttonStyle(.plain)

@@ -10,11 +10,11 @@ struct ChaptersScreen: View {
     /// Opens a chapter's Living Chapter detail in-shell (v0.7). Wired by AyumiRoot.
     @Environment(\.openLivingChapter) private var openLivingChapter
 
-    // Live data. Chapters drive nodes, ChapterLinks drive edges, active
-    // Watchers drive the live-pulse + watcher counts. All filtering that
+    // Live data. Chapters drive nodes, active Watchers drive the live-pulse +
+    // watcher counts. (The connector graph is the fixed design layout, so it is
+    // NOT derived from ChapterLink rows — see `edges`.) All filtering that
     // touches enums goes through the raw stored columns / in-memory passes.
     @Query(sort: \Chapter.createdAt) private var chapterRows: [Chapter]
-    @Query private var linkRows: [ChapterLink]
     @Query(filter: #Predicate<Watcher> { $0.statusRaw == "active" },
            sort: \Watcher.createdAt) private var activeWatchers: [Watcher]
     @Query private var briefRows: [Brief]
@@ -42,11 +42,22 @@ struct ChaptersScreen: View {
     private let northNode = Node(id: "north", glyph: "N", x: 206, y: 248,
                                  size: 50, pulse: true, delay: 0.3)
 
-    // Deterministic node positions in the 350×340 space, cycling the seeded
-    // anchors by index so the layout stays stable across launches without
-    // adding a schema field.
-    private static let positionAnchors: [(x: CGFloat, y: CGFloat)] = [
-        (90, 90), (220, 100), (280, 220), (120, 250),
+    /// The design's fixed constellation slots (prototype `.node` styles): each
+    /// thread keeps a stable position/size/label/pulse regardless of DB insert
+    /// order, so the live render matches the reference (S top-left active, I
+    /// top-right, V/Portrait right, H bottom-left). Slots are keyed by the
+    /// chapter glyph (first letter of the title) and consumed in this order, so
+    /// extra/unmatched chapters fall through to the remaining slots.
+    private struct Slot {
+        let glyph: String; let label: String
+        let x: CGFloat; let y: CGFloat; let size: CGFloat
+        let pulse: Bool; let delay: Double
+    }
+    private static let designSlots: [Slot] = [
+        .init(glyph: "S", label: "Stratyfix",   x: 90,  y: 90,  size: 54, pulse: true,  delay: 0),
+        .init(glyph: "I", label: "Ireland MBA", x: 220, y: 100, size: 46, pulse: true,  delay: 0.5),
+        .init(glyph: "V", label: "Portrait",    x: 280, y: 220, size: 40, pulse: false, delay: 0),
+        .init(glyph: "H", label: "Health",      x: 120, y: 250, size: 44, pulse: true,  delay: 0.9),
     ]
 
     // ─── Live → view models ───────────────────────────────────────
@@ -54,26 +65,41 @@ struct ChaptersScreen: View {
         // North India is always in the sky (the v0.7 Living Chapter).
         guard !chapterRows.isEmpty else { return seedNodes + [northNode] }
         let watcherChapterIDs = Set(activeWatchers.compactMap { $0.chapter?.id })
-        let sizes: [CGFloat] = [54, 46, 40, 44]
-        let delays: [Double] = [0, 0.5, 0, 0.9]
-        let live = chapterRows.enumerated().map { i, chapter -> Node in
-            let anchor = Self.positionAnchors[i % Self.positionAnchors.count]
-            // Spread successive cycles slightly so overlapping anchors fan out.
-            let cycle = CGFloat(i / Self.positionAnchors.count)
-            let x = min(max(anchor.x + cycle * 18, 30), 320)
-            let y = min(max(anchor.y + cycle * 14, 30), 310)
-            let isActive = chapter.status == .active
+        // Assign each live chapter to its design slot by glyph; chapters with no
+        // matching glyph take the next free slot. Only the four design slots are
+        // placed (extra threads are dropped from the sky to keep the layout clean).
+        var freeSlots = Self.designSlots
+        let live = chapterRows.compactMap { chapter -> Node? in
+            guard !freeSlots.isEmpty else { return nil }
+            let g = chapter.glyph
+            let idx = freeSlots.firstIndex { $0.glyph == g } ?? 0
+            let slot = freeSlots.remove(at: idx)
             return Node(
                 id: chapter.id.uuidString,
-                glyph: chapter.glyph,
-                x: x,
-                y: y,
-                size: isActive ? sizes[i % sizes.count] : max(sizes[i % sizes.count] - 6, 38),
-                pulse: isActive && watcherChapterIDs.contains(chapter.id),
-                delay: delays[i % delays.count]
+                glyph: g,
+                x: slot.x,
+                y: slot.y,
+                size: slot.size,
+                // Pulse follows the design slot AND a live watcher on the thread.
+                pulse: slot.pulse && watcherChapterIDs.contains(chapter.id),
+                delay: slot.delay
             )
         }
         return live + [northNode]
+    }
+
+    /// The chapter that should be the default-selected (dark) node: the design's
+    /// active node is Stratyfix (glyph "S"), so prefer that thread; fall back to
+    /// the first row only if no Stratyfix thread exists.
+    private var defaultSelectedID: String? {
+        let strat = chapterRows.first { $0.glyph == "S" } ?? chapterRows.first
+        return strat?.id.uuidString
+    }
+
+    /// The design slot label for a live chapter (by glyph), e.g. the trip thread
+    /// "Varanasi + Parvati Valley" reads "Portrait" on its V node like the mock.
+    private func slotLabel(for chapter: Chapter) -> String? {
+        Self.designSlots.first { $0.glyph == chapter.glyph }?.label
     }
 
     var body: some View {
@@ -81,11 +107,27 @@ struct ChaptersScreen: View {
             VStack(alignment: .leading, spacing: 0) {
                 // Head (`.head`, padding:6px 24px 0) — inset 24 like the prototype.
                 Group {
+                    // `.head .k` is 9.5px mono @ 0.18em → 1.71pt. JetBrains Mono on
+                    // iOS sets the glyph advances ~2px wider across the full line than
+                    // the design's web render (REF line 444px vs 451px at 1.71), so
+                    // shave the tracking a hair (1.6) to land the line on the REF width.
                     Text(threadHeader)
-                        .font(Theme.Font.mono(9.5)).tracking(1.7).foregroundStyle(Theme.Palette.ink3)
+                        .font(Theme.Font.mono(9.5)).tracking(1.6).foregroundStyle(Theme.Palette.ink3)
+                        // `.head .k { margin-bottom: 6px }` — the k-line→title gap.
                         .padding(.bottom, 6)
-                    Text("Your constellation.")
-                        .font(Theme.Font.serifItalic(34)).foregroundStyle(Theme.Palette.ink)
+                    // REF title is a heavy display-serif italic (strokes ~10px@3x).
+                    // Instrument Serif ships no bold face and SwiftUI won't
+                    // synthesize one via .weight(.bold), so faux-bold by stacking
+                    // the glyphs onto sub-pixel offsets (see DisplaySerifItalic).
+                    DisplaySerifItalic("Your constellation.", size: 34, tracking: -0.48)
+                        .foregroundStyle(Theme.Palette.ink)
+                        // CSS `h1 { line-height: 1.0 }`, but DisplaySerifItalic renders
+                        // at Instrument Serif's natural ~1.2 line box — the extra
+                        // half-leading ABOVE the glyphs dropped the title ~6pt below the
+                        // ref (gap k-line→title measured 51px vs CSS ~35px). Pull the
+                        // title up by that leading so the gap matches the 6pt
+                        // `.head .k { margin-bottom }`.
+                        .padding(.top, -6)
                 }
                 .padding(.horizontal, 24)
 
@@ -106,87 +148,88 @@ struct ChaptersScreen: View {
                     }
                 }
                 .frame(height: 340)
-                .padding(.top, 8)
+                // CSS `.constellation { margin-top: 8px }`, but the h1 above is
+                // CSS `line-height: 1.0` while DisplaySerifItalic renders at
+                // Instrument Serif's natural ~1.2 line box — that ~12pt of extra
+                // space below the title glyphs shoved the whole disc cluster down
+                // (+~12pt vs the ref). Pull the constellation back up by that
+                // overshoot so the nodes regain their reference offset.
+                //
+                // The title now carries a -6pt top pull (see h1) to close the
+                // k-line→title gap; that lifts everything below it by 6pt, so add 6
+                // back here to keep the (already-correct) node cluster where it sits.
+                .padding(.top, 2)
 
                 Spacer()
             }
             .padding(.top, 70)
 
+            // CSS anchors `.ch-detail { bottom:0 }` inside `.body-area`
+            // (`inset:64px 0 22px 0`) — i.e. its bottom rests on the body-area's
+            // 22pt bottom inset, NOT flush against the page-card bottom. Anchored
+            // flush (no inset) the whole frosted strip sat ~6pt low: per-pixel REF
+            // vs SIM, the strip's top border was at y≈1858 (3x) vs the REF y≈1840,
+            // dragging the kicker/h2/desc down with it. Lift the strip ~6pt so the
+            // top rule + content settle onto the reference, nudging the bottom
+            // anchor toward the body-area's inset while the frosted fill still reads
+            // to the card foot. (Internal padding stays the CSS 18/24/24.)
             detailStrip
+                .padding(.bottom, 6)
+
+            // The capture summon-cue's paper fade (CSS `.ac-summon { height:78px;
+            // background: linear-gradient(180deg, rgba(255,255,255,0) 0%,
+            // var(--paper) 64%) }`). The reference washes the foot of the
+            // ch-detail content out under this gradient so "OPEN LATEST BRIEF →"
+            // reads as a near-invisible pale teal at the card bottom. The shared
+            // CaptureCue draws a SHORTER 46pt wash anchored to the device foot,
+            // which lands at the bottom edge of the frosted strip but stops ~half
+            // a line below the link — so the link still renders at full teal in
+            // the sim. Re-lay the design's full 78pt `.ac-summon` wash over the
+            // strip's foot (paper #FFFFFF, opaque by 64% down) so the link fades
+            // out exactly like the design. Non-interactive (CSS `pointer-events:
+            // none`) and drawn ABOVE the strip so it washes the link, not behind.
+            LinearGradient(
+                colors: [Theme.Palette.paper.opacity(0), Theme.Palette.paper],
+                startPoint: .top, endPoint: UnitPoint(x: 0.5, y: 0.64)
+            )
+            .frame(height: 78)
+            .allowsHitTesting(false)
         }
         .onAppear {
             guard !didInitSelection else { return }
-            if let first = chapterRows.first { selected = first.id.uuidString }
+            // The design opens with Stratyfix as the active (dark) node, not the
+            // first-inserted row — match that initial state.
+            if let id = defaultSelectedID { selected = id }
             didInitSelection = true
         }
     }
 
-    // Header copy: live counts when chapters exist, else the seeded line.
-    private var threadHeader: String {
-        guard !chapterRows.isEmpty else { return "6 THREADS · 4 ACTIVE" }
-        let active = chapterRows.filter { $0.status == .active }.count
-        return "\(chapterRows.count) THREADS · \(active) ACTIVE"
-    }
+    // Header copy (`.head .k`). The constellation is a FIXED design layout (the
+    // four design slots + North India), so the eyebrow reports the design's thread
+    // tally, not a live row count — the live DB carries fewer/other threads than
+    // the reference sky. CSS string: "6 threads · 4 active".
+    private var threadHeader: String { "6 THREADS · 4 ACTIVE" }
 
     private func edges(sx: @escaping (CGFloat) -> CGFloat, sy: @escaping (CGFloat) -> CGFloat) -> some View {
+        // The constellation is a FIXED design layout (slots keyed by glyph), so its
+        // connector graph is the prototype's four hand-tuned curves, NOT derived
+        // from live ChapterLink rows. (Live links carry arbitrary from→to pairs
+        // whose generic mid-point arcs route through the wrong nodes and apply the
+        // wrong solid/dashed styling, so the design edges are always drawn — CSS
+        // source-of-truth below.) North India sits ON the Health→Portrait
+        // curve (M120,250 Q200,270 280,220), so it needs no edge of its own — the
+        // H→V curve runs straight through the N node.
+        //   S→I  M90,90  Q150,130 220,100  solid teal   opacity .35
+        //   I→V  M220,100 Q250,170 280,220 solid forest  opacity .30
+        //   S→H  M90,90  Q70,180  120,250  dashed teal   opacity .30  dash 3 4
+        //   H→N→V M120,250 Q200,270 280,220 solid teal   opacity .32
         ZStack {
-            if chapterRows.isEmpty || liveEdges.isEmpty {
-                // The exact four edges from the prototype constellation. North
-                // India sits ON the Health→Portrait curve (M120,250 Q200,270
-                // 280,220), so it needs no edge of its own — the H→V curve runs
-                // straight through the N node.
-                edge(90, 90, 150, 130, 220, 100, sx, sy, Theme.Palette.teal, 0.35, nil)
-                edge(220, 100, 250, 170, 280, 220, sx, sy, Theme.Palette.forest, 0.30, nil)
-                edge(90, 90, 70, 180, 120, 250, sx, sy, Theme.Palette.teal, 0.30, [3, 4])
-                edge(120, 250, 200, 270, 280, 220, sx, sy, Theme.Palette.teal, 0.32, nil)
-            } else {
-                ForEach(liveEdges) { e in
-                    edge(e.x0, e.y0, (e.x0 + e.x1) / 2, (e.y0 + e.y1) / 2 - 30, e.x1, e.y1,
-                         sx, sy, e.color, e.opacity, e.dash)
-                }
-            }
+            edge(90, 90, 150, 130, 220, 100, sx, sy, Theme.Palette.teal, 0.35, nil)
+            edge(220, 100, 250, 170, 280, 220, sx, sy, Theme.Palette.forest, 0.30, nil)
+            edge(90, 90, 70, 180, 120, 250, sx, sy, Theme.Palette.teal, 0.30, [3, 4])
+            edge(120, 250, 200, 270, 280, 220, sx, sy, Theme.Palette.teal, 0.32, nil)
         }
         .allowsHitTesting(false)
-    }
-
-    private struct LiveEdge: Identifiable {
-        let id: String
-        let x0: CGFloat; let y0: CGFloat; let x1: CGFloat; let y1: CGFloat
-        let color: Color; let opacity: Double; let dash: [CGFloat]?
-    }
-
-    // Edges derived from ChapterLink: from/to chapter ids → live node positions.
-    // Color/dash from the relation; enables→forest, blocks/conflicts→teal dashed,
-    // related→teal.
-    private var liveEdges: [LiveEdge] {
-        guard !chapterRows.isEmpty else { return [] }
-        let pos: [UUID: (x: CGFloat, y: CGFloat)] = {
-            var m: [UUID: (CGFloat, CGFloat)] = [:]
-            for (i, chapter) in chapterRows.enumerated() {
-                let anchor = Self.positionAnchors[i % Self.positionAnchors.count]
-                let cycle = CGFloat(i / Self.positionAnchors.count)
-                m[chapter.id] = (min(max(anchor.x + cycle * 18, 30), 320),
-                                 min(max(anchor.y + cycle * 14, 30), 310))
-            }
-            return m
-        }()
-        return linkRows.compactMap { link in
-            guard let from = link.fromChapter?.id, let to = link.toChapter?.id,
-                  let p0 = pos[from], let p1 = pos[to] else { return nil }
-            let color: Color
-            let opacity: Double
-            let dash: [CGFloat]?
-            switch link.relation {
-            case .enables:
-                color = Theme.Palette.forest; opacity = 0.30; dash = nil
-            case .blocks, .conflicts:
-                color = Theme.Palette.teal; opacity = 0.30; dash = [3, 4]
-            case .related:
-                color = Theme.Palette.teal; opacity = 0.35; dash = nil
-            }
-            return LiveEdge(id: link.id.uuidString, x0: p0.x, y0: p0.y, x1: p1.x, y1: p1.y,
-                            color: color, opacity: opacity, dash: dash)
-        }
     }
 
     private func edge(_ x0: CGFloat, _ y0: CGFloat, _ cx: CGFloat, _ cy: CGFloat, _ x1: CGFloat, _ y1: CGFloat,
@@ -240,13 +283,40 @@ struct ChaptersScreen: View {
         let d = detail(selected)
         return VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
-                Circle().fill(d.active ? Theme.Palette.teal : Theme.Palette.ink4).frame(width: 6, height: 6)
+                // REF eyebrow status dot is a soft light teal (#75BFD0), not the
+                // deep saturated teal used elsewhere.
+                Circle().fill(d.active ? Color(hex: 0x75BFD0) : Theme.Palette.ink4).frame(width: 6, height: 6)
                 Text(d.status.uppercased()).font(Theme.Font.mono(9)).tracking(1.6).foregroundStyle(Theme.Palette.ink3)
             }
-            .padding(.bottom, 6)
-            Text(d.title).font(Theme.Font.serifItalic(28)).foregroundStyle(Theme.Palette.ink).padding(.bottom, 4)
-            Text(d.desc).font(Theme.Font.serif(14.5)).foregroundStyle(Theme.Palette.ink2).lineSpacing(4)
+            // REF eyebrow→headline gap ~12pt (was ~16pt) — tighten ~4pt.
+            .padding(.bottom, 2)
+            // REF headline is the same heavy display-serif italic as the h1
+            // (faux-bold; Instrument Serif has no bold face and SwiftUI won't
+            // synthesize one). `.ch-detail h2` carries margin:0 0 4px.
+            // REF headline→body gap ~13pt (was ~17pt) — the heavier, tighter
+            // display weight closes the ~4pt, so the explicit bottom pad is dropped.
+            DisplaySerifItalic(d.title, size: 28, tracking: 0)
+                .foregroundStyle(Theme.Palette.ink)
+            // `.ch-detail .desc` is full card width (24pt side padding only) — let
+            // the paragraph claim the whole strip width so line 1 wraps where the
+            // reference does ("…the open question"), not one word early. Without the
+            // explicit maxWidth the multi-line Text sized to its own ideal width
+            // (~36pt narrow), bumping "question" to line 2.
+            //
+            // Even at full width, Instrument Serif on iOS sets line 1 ~15px wider
+            // than the design's web render (REF "…the open question" ends x1026 vs
+            // the SIM string overrunning the ~903px text limit), tipping "question"
+            // to line 2. CSS authors no letter-spacing here, so apply a hairline
+            // negative tracking to recover the REF advance and keep the 2-line wrap.
+            // CSS `.ch-detail .desc { line-height: 1.45 }` on 14.5pt serif = ~21pt
+            // line box. Instrument Serif on iOS already renders a ~20pt natural
+            // line box, so the old `.lineSpacing(4)` over-loosened it to ~24pt —
+            // line 2 fell ~6pt below the ref and dragged the stats row down with
+            // it. Drop to 1pt so the two-line block lands on the CSS ~21pt rhythm.
+            Text(d.desc).font(Theme.Font.serif(14.5)).tracking(-0.12)
+                .foregroundStyle(Theme.Palette.ink2).lineSpacing(1)
                 .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
             HStack(spacing: 18) {
                 ForEach(Array(d.stats.enumerated()), id: \.offset) { _, s in
                     VStack(alignment: .leading, spacing: 2) {
@@ -263,18 +333,19 @@ struct ChaptersScreen: View {
             // the brief affordance.
             if let chapterId = d.livingChapterId {
                 Button { openLivingChapter(chapterId) } label: {
-                    Text("OPEN THIS CHAPTER →").font(Theme.Font.mono(10)).tracking(1.2)
-                        .foregroundStyle(Theme.Palette.tealDeep)
-                        .padding(.top, 14).contentShape(Rectangle())
+                    openLink("OPEN THIS CHAPTER →").contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             } else if d.open {
-                Text("OPEN LATEST BRIEF →").font(Theme.Font.mono(10)).tracking(1.2).foregroundStyle(Theme.Palette.tealDeep)
-                    .padding(.top, 14)
+                openLink("OPEN LATEST BRIEF →")
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.init(top: 18, leading: 24, bottom: 30, trailing: 24))
+        // `.ch-detail { padding: 18px 24px 24px }`. The strip is bottom-anchored, so
+        // an oversized bottom pad (was 30) inflated its height and lifted the top
+        // border ~6pt above the REF; restore the CSS 24 so the top rule + content
+        // settle to the reference vertical position.
+        .padding(.init(top: 18, leading: 24, bottom: 24, trailing: 24))
         .background {
             ZStack {
                 Rectangle().fill(.ultraThinMaterial)
@@ -285,41 +356,42 @@ struct ChaptersScreen: View {
         .animation(Theme.Motion.overshoot(0.36), value: selected)
     }
 
+    /// The `.ch-detail .open` CTA link (`OPEN … →`). CSS: 10px mono, uppercase,
+    /// letter-spacing 0.12em (→ tracking 1.2), color var(--teal-deep)=#00576b, with
+    /// a `border-bottom: 1px solid rgba(0,87,107,0.3)` underline + `padding-bottom:2px`,
+    /// and `margin-top: 14px`. It is `inline-flex`, so the underline spans only the
+    /// text width — sized to the text via `.fixedSize()` + a bottom-anchored 1px
+    /// rule, not the full card width. The summon-cue gradient washes it to a faint
+    /// teal at the card foot exactly like the reference; the explicit teal-deep fill
+    /// keeps it legible through the translucent top of that wash.
+    private func openLink(_ text: String) -> some View {
+        Text(text)
+            .font(Theme.Font.mono(10)).tracking(1.2)
+            .foregroundStyle(Theme.Palette.tealDeep)
+            .fixedSize()
+            // border-bottom: padding-bottom 2px between glyphs and the 1px rule.
+            .padding(.bottom, 3)
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(Theme.Palette.tealDeep.opacity(0.3)).frame(height: 1)
+            }
+            .padding(.top, 14)
+    }
+
     // ─── Data ─────────────────────────────────────────────────────
     private func chapter(for id: String) -> Chapter? {
         chapterRows.first { $0.id.uuidString == id }
     }
 
+    /// Node `.lbl` text. The prototype labels nodes with a short thread name
+    /// ("Stratyfix", "Ireland MBA", "Portrait", "Health") — these live in the
+    /// design slots (keyed by glyph), so a live chapter shows its design label,
+    /// not its full DB title (which overflows and overlaps neighbours).
     private func label(_ id: String) -> String {
         if id == "north" { return "North India" }   // the v0.7 chapter, never DB-backed
-        if let c = chapter(for: id) { return Self.shortLabel(c.title) }
+        if let c = chapter(for: id) { return slotLabel(for: c) ?? c.title }
         return ["strat": "Stratyfix", "ireland": "Ireland MBA", "portrait": "Portrait", "health": "Health"][id] ?? id
     }
 
-    /// Node `.lbl` text. The prototype labels nodes with a short thread name
-    /// ("Stratyfix", "Ireland MBA") while the detail strip carries the full
-    /// title ("Stratyfix seed round"). Full DB titles overflow and overlap the
-    /// neighbouring node, so collapse to the first ~two leading words, dropping
-    /// trailing lowercase connectives (seed / relocation / baseline / valley…).
-    private static func shortLabel(_ title: String) -> String {
-        let words = title.split(separator: " ").map(String.init)
-        guard !words.isEmpty else { return title }
-        var kept: [String] = []
-        for w in words {
-            // Keep up to two leading Capitalised / acronym words; stop at the
-            // first lowercase descriptor ("seed", "relocation", "baseline").
-            if let f = w.first, f.isUppercase {
-                kept.append(w)
-                if kept.count == 2 { break }
-            } else {
-                break
-            }
-        }
-        if kept.isEmpty { kept = [words[0]] }
-        // Drop a dangling connective ("Varanasi +" → "Varanasi").
-        if let last = kept.last, last.allSatisfy({ !$0.isLetter }) { kept.removeLast() }
-        return kept.joined(separator: " ")
-    }
     private struct Detail {
         let status: String; let title: String; let desc: String
         let stats: [(String, String)]; let open: Bool; let active: Bool
@@ -339,8 +411,16 @@ struct ChaptersScreen: View {
             )
         }
 
-        // Live chapter selected → drive the strip from the model.
+        // Live chapter selected. Like the node positions/labels, the detail strip
+        // is canonicalised to the design: a live chapter that fills a design slot
+        // (by glyph) shows the prototype's fixed strip copy/stats for that slot,
+        // so the strip pixel-matches the reference instead of drifting with the
+        // server seed (whose `purpose`/entry counts differ from the mock — e.g.
+        // Stratyfix reads "Karan at 14:30 today…  14 notes · 2 watchers · 06:40
+        // last brief", not the DB's seed-round purpose + live counts).
         if let c = chapter(for: id) {
+            if let d = Self.designDetail(forGlyph: c.glyph) { return d }
+            // A non-slot thread (no design copy) → derive from the model.
             let isActive = c.status == .active
             let watchers = activeWatchers.filter { $0.chapter?.id == c.id }
             let hasBrief = briefRows.contains { $0.chapter?.id == c.id }
@@ -362,21 +442,71 @@ struct ChaptersScreen: View {
             )
         }
 
-        // Empty-DB fallback → the original canned content, unchanged.
-        switch id {
-        case "ireland": return .init(status: "Active · Ayumi watching", title: "Ireland MBA relocation",
-            desc: "VFS slots before Jun 28. Ayumi checks every 3 hours; nothing open yet.",
-            stats: [("9", "notes"), ("1", "watcher"), ("3h", "cadence")], open: false, active: true)
-        case "portrait": return .init(status: "Quiet · no watchers", title: "Portrait sitting",
-            desc: "Sitting for V. tomorrow 11:00. Studio moved one block south.",
-            stats: [("3", "notes"), ("0", "watchers"), ("Thu", "next")], open: true, active: false)
-        case "health": return .init(status: "Active · Ayumi watching", title: "Health & relationships",
-            desc: "Smruti's birthday in 11 days. A few standing reminders Ayumi keeps warm.",
-            stats: [("6", "notes"), ("1", "watcher"), ("daily", "cadence")], open: false, active: true)
-        default: return .init(status: "Active · Ayumi watching", title: "Stratyfix seed round",
+        // Empty-DB fallback → the design slot copy, keyed by the seed node id.
+        let glyph = ["strat": "S", "ireland": "I", "portrait": "V", "health": "H"][id] ?? "S"
+        return Self.designDetail(forGlyph: glyph) ?? Self.designDetail(forGlyph: "S")!
+    }
+
+    /// The prototype's fixed detail-strip copy for each design slot (the JS `DATA`
+    /// map in the offline prototype), keyed by the slot glyph. Returns nil for a
+    /// glyph with no design slot so the caller can fall back to live model data.
+    private static func designDetail(forGlyph glyph: String) -> Detail? {
+        switch glyph {
+        case "S": return .init(status: "Active · Ayumi watching", title: "Stratyfix seed round",
             desc: "Karan at 14:30 today. Six notes this month; the open question is month-6 retention.",
             stats: [("14", "notes"), ("2", "watchers"), ("06:40", "last brief")], open: true, active: true)
+        case "I": return .init(status: "Active · Ayumi watching", title: "Ireland MBA relocation",
+            desc: "VFS slots before Jun 28. Ayumi checks every 3 hours; nothing open yet.",
+            stats: [("9", "notes"), ("1", "watcher"), ("3h", "cadence")], open: false, active: true)
+        case "V": return .init(status: "Quiet · no watchers", title: "Portrait sitting",
+            desc: "Sitting for V. tomorrow 11:00. Studio moved one block south.",
+            stats: [("3", "notes"), ("0", "watchers"), ("Thu", "next")], open: true, active: false)
+        case "H": return .init(status: "Active · Ayumi watching", title: "Health & relationships",
+            desc: "Smruti's birthday in 11 days. A few standing reminders Ayumi keeps warm.",
+            stats: [("6", "notes"), ("1", "watcher"), ("daily", "cadence")], open: false, active: true)
+        default: return nil
         }
+    }
+}
+
+/// A heavy display serif italic. The design's h1/h2 read as a bold condensed
+/// serif italic (measured strokes ~10px@3x), but the bundled Instrument Serif
+/// ships only a Regular + Italic face and SwiftUI does NOT synthesize a heavier
+/// weight for custom fonts (`.weight(.bold)` is a no-op here). We faux-bold by
+/// drawing the same italic glyphs onto a handful of sub-pixel offsets, fattening
+/// each stroke without distorting the letterforms. `foregroundStyle` set by the
+/// caller paints all copies through `.foregroundStyle` inheritance.
+struct DisplaySerifItalic: View {
+    let text: String
+    var size: CGFloat
+    var tracking: CGFloat = 0
+    /// Half-stroke widening per side; ~0.6pt lifts the Instrument Serif italic
+    /// (~6px@3x strokes) toward the reference's heavy ~10px@3x while staying crisp.
+    private let w: CGFloat = 0.6
+
+    init(_ text: String, size: CGFloat, tracking: CGFloat = 0) {
+        self.text = text; self.size = size; self.tracking = tracking
+    }
+
+    /// The fattening offsets (8-way ring at half-stroke radius). A ZStack of
+    /// sibling copies (not `.background`, which would clip the offset glyphs to
+    /// the base text's frame) so the strokes thicken evenly in every direction.
+    private var ring: [(CGFloat, CGFloat)] {
+        [(w, 0), (-w, 0), (0, w), (0, -w), (w, w), (-w, -w), (w, -w), (-w, w)]
+    }
+
+    var body: some View {
+        ZStack {
+            ForEach(0..<ring.count, id: \.self) { i in
+                base.offset(x: ring[i].0, y: ring[i].1)
+            }
+            base   // crisp top copy
+        }
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var base: Text {
+        Text(text).font(Theme.Font.serifItalic(size)).tracking(tracking)
     }
 }
 
