@@ -85,6 +85,20 @@
       "when": 1780666838634,
       "tag": "0011_fancy_spirit",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1780750171441,
+      "tag": "0012_sticky_captain_stacy",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1780759085297,
+      "tag": "0013_clammy_the_enforcers",
+      "breakpoints": true
     }
   ]
 }

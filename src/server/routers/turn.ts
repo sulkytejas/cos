@@ -1,14 +1,14 @@
 import { z } from "zod";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { router, protectedProcedure } from "../trpc";
 import { db } from "@/db/client";
-import { turns, proposals } from "@/db/schema";
+import { turns, proposals, observations } from "@/db/schema";
 
 /**
  * Turn router (Today agentic flow v1, §4.d/§4.f).
  *
  * The morning turn's `memo` is the redline surface: in Review the user strikes
- * the lines that don't matter (teaching her what to stop surfacing) and then
+ * the lines that don't matter (teaching Ayumi what to stop surfacing) and then
  * "keeps" the memo. Both mutations are scoped to `ctx.userId` with
  * `deletedAt IS NULL`, bump `updatedAt` so the edit rides the delta-sync cursor
  * back to the mirror, and are idempotent under an at-least-once outbox retry.
@@ -23,7 +23,22 @@ export const turnRouter = router({
    * transition-guard discipline: the proposal only moves `pending → dismissed`).
    */
   strike: protectedProcedure
-    .input(z.object({ turnId: z.string(), lineId: z.string(), struck: z.boolean() }))
+    .input(
+      z.object({
+        turnId: z.string(),
+        lineId: z.string(),
+        struck: z.boolean(),
+        /**
+         * Word-level redline: indices of struck words in the line's display
+         * tokenization. Partial strike = struck:false + a non-empty list (a
+         * PUT — the line lives on with its spans recorded; no forget/dismiss
+         * effects). Full strike = struck:true (effects fire; word list is
+         * redundant and cleared). Omitted by older clients — line-level
+         * behavior is unchanged for them.
+         */
+        struckWords: z.array(z.number().int().nonnegative()).nullish(),
+      })
+    )
     .mutation(({ input, ctx }) => {
       const now = new Date().toISOString();
       return db.transaction((tx) => {
@@ -42,6 +57,30 @@ export const turnRouter = router({
         if (!line) throw new Error("memo line not found");
 
         line.struck = input.struck;
+        // Full strike supersedes word spans; otherwise record (or clear) them.
+        line.struckWords =
+          input.struck || !input.struckWords || input.struckWords.length === 0
+            ? null
+            : [...new Set(input.struckWords)].sort((a, b) => a - b);
+
+        // Memory layer Phase 5.2: strike means FORGET. The notes this line
+        // leaned on get `struckAt` — out of the cheat sheet and the
+        // desk-setting from the next rebuild on. Un-striking un-forgets
+        // (clears struckAt) so an accidental strike is recoverable. Rows are
+        // never deleted — a struck note also inoculates the notebook against
+        // re-learning the same fact from the same old signals.
+        if (line.noteIds && line.noteIds.length > 0) {
+          tx.update(observations)
+            .set({ struckAt: input.struck ? now : null, updatedAt: now })
+            .where(
+              and(
+                inArray(observations.id, line.noteIds),
+                eq(observations.userId, ctx.userId),
+                isNull(observations.deletedAt)
+              )
+            )
+            .run();
+        }
 
         // Striking a proposal-ref line dismisses the underlying proposal — only
         // on the `pending → dismissed` edge (a retry / an already-decided

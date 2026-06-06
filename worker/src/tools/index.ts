@@ -6,7 +6,8 @@
  * Add a tool by: define schema below, add a handler, register in TOOLS map.
  */
 import { db, schema } from "../db";
-import { and, desc, eq, gte, isNull, like } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, like, ne } from "drizzle-orm";
+import { findPerson } from "../memory/people";
 
 // JSONSchema tool definitions — passed to the Anthropic API.
 export const TOOL_SCHEMAS = [
@@ -72,11 +73,28 @@ export const TOOL_SCHEMAS = [
   {
     name: "person_lookup",
     description:
-      "Find what we know about a person across all signals — emails from them, calendar events with them, journal entries mentioning them.",
+      "Find what we know about a person. Returns their contact card (canonical name, every known address/nickname, role/org) and the living notes kept about them — each note with receipts — then the raw signal/journal mentions.",
     input_schema: {
       type: "object",
       properties: {
         query: { type: "string", description: "Name or email to look up" },
+      },
+      required: ["query"],
+    },
+  },
+  {
+    name: "memory_lookup",
+    description:
+      "Check the notebook mid-thought — for the rare thing nobody pre-fetched. Ask by a person's name/email or free text; returns living notes with receipts. Set include_history to also see end-dated notes ('that was true until April').",
+    input_schema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "A person (name or email) or free text to match against note bodies" },
+        include_history: {
+          type: "boolean",
+          default: false,
+          description: "Also return superseded/end-dated notes, marked with when they stopped being true",
+        },
       },
       required: ["query"],
     },
@@ -132,6 +150,8 @@ export async function handleTool(name: string, args: ToolArgs): Promise<unknown>
       return handleBriefHistory(args);
     case "person_lookup":
       return handlePersonLookup(args);
+    case "memory_lookup":
+      return handleMemoryLookup(args);
     case "web_search":
       return { results: [], note: "web_search is stubbed in v0.2" };
     case "web_fetch":
@@ -275,16 +295,77 @@ function handleBriefHistory(args: ToolArgs) {
 
 function handlePersonLookup(args: ToolArgs) {
   const q = ((args.query as string) || "").toLowerCase();
+
+  // Memory layer Phase 1.3: same tool name, richer answer — the contact card
+  // and Ayumi's notes lead, the raw signal/journal mentions follow as before.
+  // Tools run single-tenant (see runAgent), so the bootstrap owner scopes reads.
+  const card = findPerson(schema.BOOTSTRAP_USER_ID, (args.query as string) || "");
+  let contact_card: Record<string, unknown> | null = null;
+  let notes: Record<string, unknown>[] = [];
+  if (card) {
+    contact_card = {
+      id: card.id,
+      name: card.canonicalName,
+      handles: card.handles,
+      role: card.role,
+      org: card.org,
+      firstSeenAt: card.firstSeenAt,
+      lastSeenAt: card.lastSeenAt,
+    };
+    // Living notes about any of the card's handles: not struck, not end-dated.
+    const handles = (card.handles ?? []).map((h) => h.toLowerCase());
+    if (handles.length > 0) {
+      const aboutRows = db
+        .select({ observationId: schema.observationAbout.observationId })
+        .from(schema.observationAbout)
+        .where(inArray(schema.observationAbout.handle, handles))
+        .all();
+      const ids = [...new Set(aboutRows.map((r) => r.observationId))];
+      if (ids.length > 0) {
+        notes = db
+          .select()
+          .from(schema.observations)
+          .where(
+            and(
+              inArray(schema.observations.id, ids),
+              ne(schema.observations.kind, "prediction"),
+              isNull(schema.observations.deletedAt),
+              isNull(schema.observations.invalidatedAt),
+              isNull(schema.observations.struckAt),
+            ),
+          )
+          .orderBy(desc(schema.observations.weight), desc(schema.observations.lastSeenAt))
+          .limit(20)
+          .all()
+          .map((o) => ({
+            body: o.body,
+            kind: o.kind,
+            confidence: o.confidence,
+            timesConfirmed: o.weight,
+            lastSeenAt: o.lastSeenAt,
+            receipts: o.receipts,
+          }));
+      }
+    }
+  }
+
   const allSignals = db.select().from(schema.signals).where(isNull(schema.signals.deletedAt)).all();
+  // Search raw signals by the query AND by every known handle, so "Karan"
+  // also finds mail from karan@sequoiacap.com.
+  const needles = [...new Set([q, ...((card?.handles ?? []).map((h) => h.toLowerCase()))])].filter(Boolean);
   const matches = allSignals.filter((s) => {
-    const raw = s.rawData as Record<string, unknown>;
-    const text = JSON.stringify(raw).toLowerCase();
-    return text.includes(q);
+    const text = JSON.stringify(s.rawData).toLowerCase();
+    return needles.some((n) => text.includes(n));
   });
   const allEntries = db.select().from(schema.entries).where(isNull(schema.entries.deletedAt)).all();
-  const entryHits = allEntries.filter((e) => e.content.toLowerCase().includes(q));
+  const entryHits = allEntries.filter((e) => {
+    const text = e.content.toLowerCase();
+    return needles.some((n) => text.includes(n));
+  });
 
   return {
+    contact_card,
+    notes,
     signal_mentions: matches.slice(0, 10).map((s) => ({
       source: s.source,
       arrivedAt: s.arrivedAt,
@@ -294,6 +375,102 @@ function handlePersonLookup(args: ToolArgs) {
       date: e.date,
       content: e.content,
       chapterId: e.chapterId,
+    })),
+  };
+}
+
+/**
+ * memory_lookup — memory layer Phase 4.2 (R3): the mid-thought dig nobody
+ * pre-fetched. Person queries resolve via the contact card's handles; free
+ * text matches note bodies. Living notes by default; `include_history` adds
+ * end-dated ones marked "true until <date>". Predictions never surface here.
+ */
+function handleMemoryLookup(args: ToolArgs) {
+  const query = ((args.query as string) || "").trim();
+  const includeHistory = !!args.include_history;
+  if (!query) return { notes: [], history: [] };
+  const userId = schema.BOOTSTRAP_USER_ID;
+
+  // Person path: card → handles → about-rows → note ids.
+  const card = findPerson(userId, query);
+  let ids: string[] = [];
+  if (card) {
+    const handles = (card.handles ?? []).map((h) => h.toLowerCase());
+    if (handles.length > 0) {
+      ids = [
+        ...new Set(
+          db
+            .select({ observationId: schema.observationAbout.observationId })
+            .from(schema.observationAbout)
+            .where(
+              and(
+                eq(schema.observationAbout.userId, userId),
+                inArray(schema.observationAbout.handle, handles),
+              ),
+            )
+            .all()
+            .map((r) => r.observationId),
+        ),
+      ];
+    }
+  }
+
+  let rows = ids.length
+    ? db
+        .select()
+        .from(schema.observations)
+        .where(
+          and(
+            inArray(schema.observations.id, ids),
+            ne(schema.observations.kind, "prediction"),
+            isNull(schema.observations.deletedAt),
+          ),
+        )
+        .all()
+    : [];
+
+  // Free-text fallback (or supplement when the card path found nothing).
+  if (rows.length === 0) {
+    const q = query.toLowerCase();
+    rows = db
+      .select()
+      .from(schema.observations)
+      .where(
+        and(
+          eq(schema.observations.userId, userId),
+          ne(schema.observations.kind, "prediction"),
+          isNull(schema.observations.deletedAt),
+        ),
+      )
+      .all()
+      .filter((o) => o.body.toLowerCase().includes(q));
+  }
+
+  const living = rows
+    .filter((o) => !o.invalidatedAt && !o.struckAt)
+    .sort((a, b) => b.weight - a.weight || b.lastSeenAt.localeCompare(a.lastSeenAt))
+    .slice(0, 20);
+  const history = includeHistory
+    ? rows
+        .filter((o) => o.invalidatedAt && !o.struckAt)
+        .sort((a, b) => (b.invalidatedAt ?? "").localeCompare(a.invalidatedAt ?? ""))
+        .slice(0, 10)
+    : [];
+
+  return {
+    person: card ? { name: card.canonicalName, handles: card.handles } : null,
+    notes: living.map((o) => ({
+      id: o.id,
+      body: o.body,
+      kind: o.kind,
+      timesConfirmed: o.weight,
+      lastSeenAt: o.lastSeenAt,
+      receipts: o.receipts,
+    })),
+    history: history.map((o) => ({
+      body: o.body,
+      trueUntil: o.invalidatedAt,
+      receipts: o.receipts,
     })),
   };
 }

@@ -36,3 +36,6 @@ ios/**/*.xcuserstate
 
 # Local design handoff reference (not source)
 designs temp/
+
+# Playwright MCP session artifacts
+.playwright-mcp/

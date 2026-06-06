@@ -171,7 +171,8 @@ export interface BriefOutput {
    */
   day_memo?: {
     verdict: string;
-    lines: Array<{ text: string; brief?: boolean; proposal_index?: number }>;
+    /** `note_ids` (memory Phase 5.1): notebook note ids a line leaned on — striking the line strikes them. */
+    lines: Array<{ text: string; brief?: boolean; proposal_index?: number; note_ids?: string[] }>;
     source_tag?: string;
     connector?: { source: string; copy: string };
   };
@@ -618,6 +619,24 @@ function parseFinal(raw: string, trace: AgentTraceEntry[]): AgentResult {
     const parsed = JSON.parse(body) as BriefOutput;
     return { brief: parsed, trace, raw };
   } catch (err) {
+    // Salvage pass: the model sometimes narrates before/after the JSON ("I have
+    // everything I need… {…}"). The whole agent run is already paid for, so try
+    // the outermost {...} span before declaring the run lost.
+    const first = body.indexOf("{");
+    const last = body.lastIndexOf("}");
+    if (first !== -1 && last > first) {
+      try {
+        const parsed = JSON.parse(body.slice(first, last + 1)) as BriefOutput;
+        trace.push({
+          turn: -1,
+          kind: "model_text",
+          payload: `parseFinal: salvaged JSON embedded in prose (${first} chars of preamble)`,
+        });
+        return { brief: parsed, trace, raw };
+      } catch {
+        // fall through to the non-transient failure below
+      }
+    }
     // The model's final turn wasn't valid JSON — a re-run burns a full agent pass
     // and tends to fail the same way, so this is non-transient (fail immediately).
     throw new NonTransientAgentError(`failed to parse JSON: ${(err as Error).message}`);

@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, primaryKey, real, uniqueIndex, index } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, primaryKey, real, uniqueIndex, index, type AnySQLiteColumn } from "drizzle-orm/sqlite-core";
 import { relations, sql } from "drizzle-orm";
 
 /**
@@ -83,6 +83,14 @@ export const eventTypes = [
   // result `{ghost,kind,chapterId,question,confidence}` is written to
   // `events.result`; the router polls `events.status` and returns it to the well.
   "capture_complete",
+  // Memory layer (build plan W2–W4): once per day, after the morning work
+  // finishes, this job drafts notes from what the run read/wrote (extract),
+  // reconciles them against the notebook (consolidate: ADD / REINFORCE /
+  // SUPERSEDE / DROP), and rewrites the one-page digest. Enqueued with a
+  // `memory_consolidate:<YYYY-MM-DD>` dedupeKey so boot + timer + catch-up
+  // collapse to one run per day. Phase 0 lands the type; the handler is wired
+  // in Phase 2.
+  "memory_consolidate",
 ] as const;
 export type EventType = (typeof eventTypes)[number];
 
@@ -115,10 +123,44 @@ export type TurnRole = (typeof turnRoles)[number];
 /**
  * Turn kinds. `morning` is the daily-scan turn (a verdict on Today + a
  * redlineable memo in Review); `message` is an ordinary conversational line;
- * `thinking` is the transient "reading the deck…" beat shown while she works.
+ * `thinking` is the transient "reading the deck…" beat shown while Ayumi works.
  */
 export const turnKinds = ["morning", "message", "thinking"] as const;
 export type TurnKind = (typeof turnKinds)[number];
+
+/**
+ * Observation kinds (memory layer Phase 0 — designs/Atlas Memory Layer build
+ * plan §1). Coarse buckets only — the note BODY is free-form on principle ("he
+ * goes quiet before big asks" is a perfectly good note); the kind just lets the
+ * digest builder group "habits" apart from "what's going on right now".
+ *
+ * `prediction` (Memory v2, slice P): a falsifiable bet with a numeric
+ * confidence and a resolve-by date — "Karan replies about the deck by
+ * Thursday". Predictions are the loop that makes the notebook EVOLVE: outcomes
+ * flow back along `basedOnIds` (confirmed → backing notes reinforce; refuted →
+ * they weaken), so knowing-someone becomes measurable (calibration) instead of
+ * an archive.
+ */
+export const observationKinds = [
+  "fact",
+  "preference",
+  "pattern",
+  "relationship",
+  "state",
+  "prediction",
+] as const;
+export type ObservationKind = (typeof observationKinds)[number];
+
+/** How reality graded a prediction. NULL until its resolve-by date passes. */
+export const observationOutcomes = ["confirmed", "refuted", "unresolved"] as const;
+export type ObservationOutcome = (typeof observationOutcomes)[number];
+
+/**
+ * How the note came to be believed: saw it happen in the signals, was told by the
+ * user, or inferred. Paired with `confidence` (0–1, like proposals).
+ */
+export const observationSources = ["observed", "told", "inferred"] as const;
+export type ObservationSource = (typeof observationSources)[number];
 
 // ─────────────────────────── v0.1 tables (extended with provenance) ───────────────────────────
 
@@ -586,6 +628,23 @@ export const turns = sqliteTable(
         refKind: "brief" | "proposal" | null;
         refId: string | null;
         struck: boolean;
+        /**
+         * Memory layer Phase 5.1: the notebook notes this line leaned on.
+         * Striking the line marks them struck — the red pen reaches the
+         * notebook. Optional so every pre-existing memo keeps working; iOS
+         * Codable ignores the unknown key.
+         */
+        noteIds?: string[] | null;
+        /**
+         * Word-level redline (the finer pen): indices of struck WORDS in the
+         * line's display tokenization (markup stripped, whitespace-split).
+         * A partial strike is a PUT — the line stays alive with its struck
+         * spans recorded; only a FULL strike (`struck: true`) fires the
+         * forget/dismiss effects. Word indices, not char offsets, so markup
+         * parsing differences can never skew the meaning. Optional — every
+         * pre-existing memo line decodes unchanged.
+         */
+        struckWords?: number[] | null;
       }>;
       status: "draft" | "kept";
       keptAt: string | null;
@@ -818,7 +877,7 @@ export const devUnknownComponents = sqliteTable("dev_unknown_components", {
  *    spend recomputed deterministically from the base + every applied patch.
  *  - `connectorGrants` — `{ [connectorId]: { status:'feeding', role, unlockCopy,
  *    grantedAt } }`, the result of `grantConnector()`: the source flips
- *    available→feeding and its copy is rewritten to what she can now do.
+ *    available→feeding and its copy is rewritten to what Ayumi can now do.
  *  - `needsRederive` — set when a grant should backfill + re-derive affected
  *    sections (spend itemisation, live seats, return planning) on the next read.
  *
@@ -863,7 +922,7 @@ export const tripState = sqliteTable(
  * chose the bus over the flight — I'll lead with sleepers on your Kasol leg too."
  * `correct()` writes a row here (keyed by `prefKey`, e.g. `ground_transport`), and
  * `get()` reads it back to rewrite the *unbooked* suggestion legs' copy — so the
- * next render visibly reflects what she was taught. `weight` lets a repeated lesson
+ * next render visibly reflects what Ayumi was taught. `weight` lets a repeated lesson
  * reinforce; `evidence` keeps the user's own words for the receipts thread.
  */
 export const tripPreferences = sqliteTable(
@@ -896,6 +955,179 @@ export const tripPreferences = sqliteTable(
     ),
     userIdx: index("trip_preferences_user_idx").on(t.userId),
   }),
+);
+
+// ─────────────────────────── v0.10 — the memory layer ───────────────────────────
+// designs/Atlas Memory Layer - Today Build Plan (dev).html — Phase 0.
+// Plain tables, no graph engine, no search index (locked decisions §4): the
+// notebook IS rows, and the nightly digest is the only "retrieval".
+
+/**
+ * People — contact cards (build plan §1). Right now "Karan" is just text inside
+ * email rows; after this he's one row that notes, briefs and lookups all point
+ * at. Phase 1's matcher stays deliberately dumb (exact email match only —
+ * a wrong merge makes Ayumi confidently wrong about a person), so two cards that
+ * turn out to be one person are repaired by pointing one at the other via
+ * `mergedIntoId` — never by deleting.
+ */
+export const people = sqliteTable(
+  "people",
+  {
+    id: text("id").primaryKey(),
+    /** Owning user (§4.d/§4.f). */
+    userId: text("user_id").notNull().default(BOOTSTRAP_USER_ID),
+    /** Display name, e.g. "Karan Mohla". */
+    canonicalName: text("canonical_name").notNull(),
+    /** Every email address and nickname that means this person. JSON array. */
+    handles: text("handles", { mode: "json" }).$type<string[]>().notNull().default([]),
+    /** e.g. "Partner". */
+    role: text("role"),
+    /** e.g. "Sequoia India". */
+    org: text("org"),
+    /** When this person first / last showed up in the signals. */
+    firstSeenAt: text("first_seen_at").notNull().default(ISO_NOW),
+    lastSeenAt: text("last_seen_at").notNull().default(ISO_NOW),
+    /** Two cards turn out to be one person? Point one at the other — don't delete. */
+    mergedIntoId: text("merged_into_id").references((): AnySQLiteColumn => people.id, {
+      onDelete: "set null",
+    }),
+    createdAt: text("created_at").notNull().default(ISO_NOW),
+    /** Bumped on every mutation (§4.d). ISO-8601 UTC via `$defaultFn`. */
+    updatedAt: text("updated_at").notNull().$defaultFn(() => new Date().toISOString()),
+    /** Soft-delete tombstone (§4.d). */
+    deletedAt: text("deleted_at"),
+  },
+  (t) => ({
+    userIdx: index("people_user_idx").on(t.userId),
+  })
+);
+
+/**
+ * Observations — Ayumi's notebook, one note per row (build plan §1). The body is
+ * plain words ("Karan usually runs 10 minutes late"); who it concerns lives in
+ * the `observationAbout` side table so "all notes about Karan" is an indexed
+ * query. Old notes are never deleted, only end-dated (`invalidatedAt` +
+ * `supersededById`) — that avoids the cancelled-trip-keeps-returning bug — and
+ * every note must carry `receipts` so it can prove itself, note by note.
+ * A "living" note is one where invalidatedAt, struckAt and deletedAt are all
+ * NULL — the digest and the desk-setting read only those.
+ */
+export const observations = sqliteTable(
+  "observations",
+  {
+    id: text("id").primaryKey(),
+    /** Owning user (§4.d/§4.f). */
+    userId: text("user_id").notNull().default(BOOTSTRAP_USER_ID),
+    /** The note itself, in plain words. */
+    body: text("body").notNull(),
+    /** Coarse bucket — the body stays free-form (no fixed list of note types). */
+    kind: text("kind", { enum: observationKinds }).notNull().default("fact"),
+    /** How it came to be believed: saw it / was told / guessed. */
+    source: text("source", { enum: observationSources }).notNull().default("observed"),
+    /** 0–1, like proposals.confidence. */
+    confidence: real("confidence").notNull().default(0.5),
+    /**
+     * The actual emails/events that back it up — signal ids (and event ids for
+     * things Ayumi wrote). A draft without receipts is thrown away, on
+     * principle, so this is NOT NULL with no default: every writer must bring
+     * receipts.
+     */
+    receipts: text("receipts", { mode: "json" }).$type<string[]>().notNull(),
+    /** When life first / most recently confirmed it. */
+    firstSeenAt: text("first_seen_at").notNull().default(ISO_NOW),
+    lastSeenAt: text("last_seen_at").notNull().default(ISO_NOW),
+    /** Reinforcement count — how often life keeps confirming it (REINFORCE bumps this). */
+    weight: integer("weight").notNull().default(1),
+    /** The date it stopped being true — end-dated, never deleted ("true until April"). */
+    invalidatedAt: text("invalidated_at"),
+    /** The newer note that replaced it (SUPERSEDE writes the new one, end-dates this one). */
+    supersededById: text("superseded_by_id").references((): AnySQLiteColumn => observations.id, {
+      onDelete: "set null",
+    }),
+    /** The red pen — user struck a memo line built on this note: forget it (F1). */
+    struckAt: text("struck_at"),
+    // ── Memory v2 (slice P) — prediction columns. NULL on ordinary notes. ──
+    /** The notes this prediction was derived from — outcomes flow back along these (credit assignment). */
+    basedOnIds: text("based_on_ids", { mode: "json" }).$type<string[] | null>(),
+    /** The date by which reality settles it; the resolver only looks at due predictions. */
+    resolveBy: text("resolve_by"),
+    /** When the resolver judged it. */
+    resolvedAt: text("resolved_at"),
+    /** How reality graded it: confirmed / refuted / unresolved. */
+    outcome: text("outcome", { enum: observationOutcomes }),
+    /** See briefs.generatedByEventId — a requeued memory_consolidate deletes its own half-finished notes before re-running. */
+    generatedByEventId: text("generated_by_event_id"),
+    createdAt: text("created_at").notNull().default(ISO_NOW),
+    /** Bumped on every mutation — reinforce/supersede/strike (§4.d). ISO-8601 UTC via `$defaultFn`. */
+    updatedAt: text("updated_at").notNull().$defaultFn(() => new Date().toISOString()),
+    /** Soft-delete tombstone (§4.d). */
+    deletedAt: text("deleted_at"),
+  },
+  (t) => ({
+    userIdx: index("observations_user_idx").on(t.userId),
+  })
+);
+
+/**
+ * ObservationAbout — the side table: (note id ↔ person handle) pairs, so "all
+ * notes about Karan" is a fast indexed query instead of scanning text (locked
+ * decision: still just data, not machinery). A note about two people gets two
+ * rows — that IS the connection between them. `handle` is the raw string the
+ * note named (an email address or a name); resolving handles to a `people` card
+ * goes through people.handles, so a later card-merge never rewrites these rows.
+ */
+export const observationAbout = sqliteTable(
+  "observation_about",
+  {
+    /** Owning user (§4.d/§4.f). */
+    userId: text("user_id").notNull().default(BOOTSTRAP_USER_ID),
+    observationId: text("observation_id")
+      .notNull()
+      .references(() => observations.id, { onDelete: "cascade" }),
+    /** Who/what the note concerns — an email address or a bare name. */
+    handle: text("handle").notNull(),
+    createdAt: text("created_at").notNull().default(ISO_NOW),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.observationId, t.handle] }),
+    /** The "all notes about Karan must be instant" index. */
+    userHandleIdx: index("observation_about_user_handle_idx").on(t.userId, t.handle),
+  })
+);
+
+/**
+ * Digests — Ayumi's cheat sheet, one row per user, overwritten in place (build plan
+ * §1, W4). Short markdown (~half a page): people · habits · preferences ·
+ * what's going on right now, every line showing how many receipts back it
+ * ("Karan runs late, as a rule (×4)"). Rebuilt every night from the strongest
+ * living notes and pasted into every single thing Ayumi writes — don't search
+ * memory, keep one short summary always in hand.
+ */
+export const digests = sqliteTable(
+  "digests",
+  {
+    id: text("id").primaryKey(),
+    /** Owning user (§4.d/§4.f). */
+    userId: text("user_id").notNull().default(BOOTSTRAP_USER_ID),
+    /** The cheat sheet itself — short markdown. */
+    body: text("body").notNull(),
+    /** Which notes built it — observation ids, for the receipts trail. */
+    sourceObservationIds: text("source_observation_ids", { mode: "json" })
+      .$type<string[]>()
+      .notNull()
+      .default([]),
+    /** When the nightly rebuild last wrote it. */
+    builtAt: text("built_at").notNull().default(ISO_NOW),
+    createdAt: text("created_at").notNull().default(ISO_NOW),
+    /** Bumped on every rebuild (§4.d). ISO-8601 UTC via `$defaultFn`. */
+    updatedAt: text("updated_at").notNull().$defaultFn(() => new Date().toISOString()),
+    /** Soft-delete tombstone (§4.d). */
+    deletedAt: text("deleted_at"),
+  },
+  (t) => ({
+    /** One cheat sheet per user; the nightly job upserts onto it. */
+    userUnq: uniqueIndex("digests_user_unq").on(t.userId),
+  })
 );
 
 // ─────────────────────────── relations ───────────────────────────
@@ -950,6 +1182,21 @@ export const proposalsRelations = relations(proposals, ({ one }) => ({
   sourceBrief: one(briefs, { fields: [proposals.sourceBriefId], references: [briefs.id] }),
 }));
 
+export const observationsRelations = relations(observations, ({ one, many }) => ({
+  about: many(observationAbout),
+  supersededBy: one(observations, {
+    fields: [observations.supersededById],
+    references: [observations.id],
+  }),
+}));
+
+export const observationAboutRelations = relations(observationAbout, ({ one }) => ({
+  observation: one(observations, {
+    fields: [observationAbout.observationId],
+    references: [observations.id],
+  }),
+}));
+
 // ─────────────────────────── inferred types ───────────────────────────
 
 export type Chapter = typeof chapters.$inferSelect;
@@ -985,3 +1232,11 @@ export type TripState = typeof tripState.$inferSelect;
 export type NewTripState = typeof tripState.$inferInsert;
 export type TripPreference = typeof tripPreferences.$inferSelect;
 export type NewTripPreference = typeof tripPreferences.$inferInsert;
+export type Person = typeof people.$inferSelect;
+export type NewPerson = typeof people.$inferInsert;
+export type Observation = typeof observations.$inferSelect;
+export type NewObservation = typeof observations.$inferInsert;
+export type ObservationAbout = typeof observationAbout.$inferSelect;
+export type NewObservationAbout = typeof observationAbout.$inferInsert;
+export type Digest = typeof digests.$inferSelect;
+export type NewDigest = typeof digests.$inferInsert;

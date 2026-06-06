@@ -16,9 +16,16 @@
  * `daily_scan` never doubles the "drafted while you slept" briefs, and a signal
  * is never marked processed without its brief (or vice-versa).
  */
+import { randomUUID } from "node:crypto";
 import { db, schema } from "../db";
 import { runAgent } from "../agent/loop";
 import { persistAgentResult } from "../persist";
+import { getDigestBody, rebuildDigest } from "../memory/digest";
+import { setDesk } from "../memory/desk";
+import { gatherMaterial, extractDrafts } from "../memory/extract";
+import { reconcile, applyDecisions } from "../memory/consolidate";
+import { draftPredictions } from "../memory/predict";
+import { resolveDuePredictions, applyResolutions } from "../memory/resolve";
 import { createMessage } from "../../../src/server/anthropic/gateway";
 import {
   CAPTURE_SYSTEM,
@@ -28,7 +35,7 @@ import {
   type CaptureChapter,
   type CaptureCompletionResult,
 } from "../../../src/server/anthropic/capture-prompt";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull, ne } from "drizzle-orm";
 
 /** Caps for the grounded Ask prompt — mirror ai.ts; the worker slices to these. */
 const ASK_MAX_CONTEXT_CHARS = 4_000;
@@ -74,6 +81,8 @@ export async function prepareEvent(event: schema.Event): Promise<EventCommit> {
       return prepareAiAsk(event);
     case "capture_complete":
       return prepareCaptureComplete(event);
+    case "memory_consolidate":
+      return prepareMemoryConsolidate(event);
   }
 }
 
@@ -324,10 +333,21 @@ async function prepareDailyScan(event: schema.Event): Promise<EventCommit> {
     (s) => !connectedSources.has(s),
   );
 
+  // (c) Memory layer (build plan 3.2 + 4.1): the cheat sheet is ALWAYS in hand —
+  // never searched for — and the desk is set with the top living notes about
+  // whoever shows up in today's calendar / overnight email, receipts included.
+  // Plain indexed reads (~2ms), done BEFORE the AI call starts, never during.
+  const digest = getDigestBody(event.userId);
+  const desk = setDesk(event.userId, recentSignals, scanTime);
+
   const context = [
     "Daily scan. Examine the active chapters and signals from the last 24 hours.",
     `Today is ${new Date().toISOString().slice(0, 10)}.`,
     "",
+    digest
+      ? `Your cheat sheet — what you've learned so far, kept short. Let it shape the plan (e.g. real meeting lengths, what a person tends to push on):\n"""\n${digest}\n"""\n`
+      : "",
+    desk ? `${desk}\n` : "",
     "Active chapters:",
     // Each chapter carries its advisory palette (the vocabulary of component kinds
     // this chapter's life tends to need) so the scan reasons in the right idiom.
@@ -371,6 +391,93 @@ async function prepareDailyScan(event: schema.Event): Promise<EventCommit> {
     // the SAME commit txn as the new turn insert, so today's scan and yesterday's
     // seal commit atomically.
     sealStaleMorningDrafts(event.userId);
+
+    // Memory layer 2.3: the morning work just finished — queue the nightly
+    // memory pass (extract → consolidate → predict/resolve → digest). The
+    // dedupeKey collapses it to ONE per LOCAL day no matter how many scans run
+    // (local, not UTC — a midnight-IST scan must not collide with yesterday's
+    // UTC bucket); same txn as the turn insert, so the learning job exists iff
+    // the morning did.
+    const d = new Date();
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const day = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    db.insert(schema.events)
+      .values({
+        id: randomUUID(),
+        userId: event.userId,
+        type: "memory_consolidate",
+        payload: {},
+        dedupeKey: `memory_consolidate:${day}`,
+        updatedAt: new Date().toISOString(),
+      })
+      .onConflictDoNothing()
+      .run();
+  };
+}
+
+/**
+ * The nightly memory pass — memory layer W2–W4 + Memory v2 slice P, one job:
+ *
+ *   1. RESOLVE  — predictions whose date passed get judged against the signals
+ *                 that actually arrived; outcomes teach the notes that made
+ *                 them (credit assignment along basedOnIds).
+ *   2. EXTRACT  — draft candidate notes from what the day brought (in-memory
+ *                 only; a draft with no receipts is thrown away on principle).
+ *   3. CONSOLIDATE — hold drafts against the notebook: ADD / REINFORCE /
+ *                 SUPERSEDE / DROP, with the resurrection guard (struck notes
+ *                 stay forgotten).
+ *   4. PREDICT  — write tonight's falsifiable bets (numeric confidence,
+ *                 basedOn pointers, resolve-by dates).
+ *   5. DIGEST   — rebuild the one-page cheat sheet from the strongest living
+ *                 notes (+ open expectations + the calibration line).
+ *
+ * §4.c discipline: every AI call happens HERE in prepare (no writes); the
+ * returned commit is pure synchronous better-sqlite3 work that queue.ts runs
+ * in ONE transaction with markDone — a crash rolls the whole night back and
+ * the requeued event re-runs cleanly. No partial learning, ever.
+ */
+async function prepareMemoryConsolidate(event: schema.Event): Promise<EventCommit> {
+  const now = new Date();
+
+  // 1 · resolve (AI judgment only — writes happen in commit)
+  const resolutions = await resolveDuePredictions(event.userId, now);
+
+  // 2 · extract
+  const material = gatherMaterial(event.userId, now);
+  const drafts = await extractDrafts(event.userId, material);
+
+  // 3 · consolidate (judgment)
+  const decisions = await reconcile(event.userId, drafts);
+
+  // 4 · predict (uses pre-commit notebook state; next night sees tonight's writes)
+  const predictions = await draftPredictions(event.userId, now);
+
+  return (eventId) => {
+    const settled = applyResolutions(event.userId, resolutions);
+    const stats = applyDecisions(event.userId, decisions, eventId);
+    for (const row of predictions.rows) {
+      db.insert(schema.observations)
+        .values({ ...row, generatedByEventId: eventId })
+        .run();
+    }
+    for (const about of predictions.aboutRows) {
+      db.insert(schema.observationAbout).values(about).onConflictDoNothing().run();
+    }
+    rebuildDigest(event.userId);
+    // The night's ledger, inspectable via event.status / the events table.
+    writeEventResult(eventId, {
+      noted: stats.added,
+      reinforced: stats.reinforced,
+      superseded: stats.superseded,
+      dropped: stats.dropped,
+      predictionsMade: predictions.rows.length,
+      predictionsSettled: settled,
+    });
+    console.log(
+      `[memory] night done — +${stats.added} noted, ${stats.reinforced} reinforced, ` +
+        `${stats.superseded} superseded, ${stats.dropped} dropped · ` +
+        `${predictions.rows.length} predictions made, ${settled} settled`,
+    );
   };
 }
 
@@ -540,9 +647,72 @@ async function prepareAiAsk(event: schema.Event): Promise<EventCommit> {
     ? `\n\nGrounding (what I know that's relevant):\n"""\n${context.slice(0, ASK_MAX_CONTEXT_CHARS)}\n"""`
     : "";
 
+  // Memory layer 3.2: the Q&A flow starts with the cheat sheet in the prompt,
+  // same as the morning run — a chief of staff who waits to be asked isn't one.
+  const digest = getDigestBody(event.userId);
+  const digestBlock = digest
+    ? `\n\nYour cheat sheet (what you've learned about the user's world — use it where relevant):\n"""\n${digest}\n"""`
+    : "";
+
+  // Memory layer 4.3: names in the question get matched to contact cards, and
+  // their living notes come along before the answer — same desk-setting as the
+  // morning run, triggered by the question's own words.
+  const mentioned = db
+    .select()
+    .from(schema.people)
+    .where(and(eq(schema.people.userId, event.userId), isNull(schema.people.deletedAt)))
+    .all()
+    .filter((p) => {
+      const q = query.toLowerCase();
+      const first = p.canonicalName.toLowerCase().split(/\s+/)[0];
+      return (
+        (first.length >= 3 && q.includes(first)) ||
+        (p.handles ?? []).some((h) => h.includes("@") && q.includes(h.toLowerCase()))
+      );
+    });
+  let notesBlock = "";
+  if (mentioned.length > 0) {
+    const handles = [...new Set(mentioned.flatMap((p) => (p.handles ?? []).map((h) => h.toLowerCase())))];
+    const aboutRows = handles.length
+      ? db
+          .select({ observationId: schema.observationAbout.observationId })
+          .from(schema.observationAbout)
+          .where(
+            and(
+              eq(schema.observationAbout.userId, event.userId),
+              inArray(schema.observationAbout.handle, handles),
+            ),
+          )
+          .all()
+      : [];
+    const ids = [...new Set(aboutRows.map((r) => r.observationId))];
+    if (ids.length > 0) {
+      const notes = db
+        .select()
+        .from(schema.observations)
+        .where(
+          and(
+            inArray(schema.observations.id, ids),
+            ne(schema.observations.kind, "prediction"),
+            isNull(schema.observations.deletedAt),
+            isNull(schema.observations.invalidatedAt),
+            isNull(schema.observations.struckAt),
+          ),
+        )
+        .all()
+        .sort((a, b) => b.weight - a.weight || b.lastSeenAt.localeCompare(a.lastSeenAt))
+        .slice(0, 10);
+      if (notes.length > 0) {
+        notesBlock =
+          `\n\nYour notes on the people named in the question:\n` +
+          notes.map((n) => `- ${n.body} (seen ×${n.weight})`).join("\n");
+      }
+    }
+  }
+
   const userMessage = `You are Atlas, a quiet personal AI assistant answering a grounded question.${
     scope ? `\n\nScope: ${scope}` : ""
-  }${groundingBlock}
+  }${digestBlock}${notesBlock}${groundingBlock}
 
 Conversation so far:
 ${historyText || "(none)"}
@@ -687,7 +857,18 @@ function writeCaptureResult(eventId: string, result: CaptureCompletionResult): v
  */
 function writeEventResult(
   eventId: string,
-  result: { answer: string; resultProposalIds: string[] },
+  result:
+    | { answer: string; resultProposalIds: string[] }
+    // The nightly memory pass writes its ledger here instead (inspectable
+    // via the events table / event.status) — same column, different shape.
+    | {
+        noted: number;
+        reinforced: number;
+        superseded: number;
+        dropped: number;
+        predictionsMade: number;
+        predictionsSettled: number;
+      },
 ): void {
   db.update(schema.events)
     .set({ result, updatedAt: new Date().toISOString() })

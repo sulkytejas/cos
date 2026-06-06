@@ -163,7 +163,7 @@ export function persistAgentResult(
     // Validate the connector suggestion against the sources iOS can actually grant
     // (the three Google scopes the OAuth machinery covers). A SUPPORTED source
     // rides on the turn as a tappable CONNECT CTA. An UNSUPPORTED one (anything
-    // else she names — whatsapp, a bank) is NOT a user CTA: iOS can't grant it,
+    // else Ayumi names — whatsapp, a bank) is NOT a user CTA: iOS can't grant it,
     // so rendering it as a button would dead-end. Instead it's a dev SIGNAL — a
     // real observed gap the builders should know about — so we null it on the turn
     // and log it to the wishlist (dev_unknown_components), the same ledger the
@@ -204,6 +204,12 @@ export function persistAgentResult(
                 ? (proposalIds[l.proposal_index] ?? null)
                 : null,
             struck: false,
+            // Phase 5.1: which notebook notes this line leaned on. Striking the
+            // line marks them struck (turn.strike) — the red pen reaches the
+            // notebook. Only ids that look like real note refs are kept.
+            noteIds: Array.isArray(l.note_ids) && l.note_ids.length > 0
+              ? l.note_ids.filter((id): id is string => typeof id === "string")
+              : null,
           })),
           status: "draft",
           keptAt: null,
@@ -267,17 +273,33 @@ function writePayload(
   const cid = chapterId ?? (payload.chapterId as string | undefined);
   if (!cid) return;
   const now = new Date().toISOString();
+
+  // Model output is advisory, not trusted: coerce the aliases the model
+  // actually emits (`title` for a todo's text, `text` for an entry's content),
+  // and SKIP a row that still lacks its required field instead of letting a
+  // NOT NULL constraint kill the whole commit txn — which would requeue the
+  // event and re-run the entire paid agent pass. The proposal row itself is
+  // already persisted either way, so nothing is silently lost — it just stays
+  // in the Review Queue instead of auto-filing.
+  const str = (v: unknown): string | null =>
+    typeof v === "string" && v.trim() ? v.trim() : null;
+
   // §4.d: stamp `sourceProposalId` + bare `ON CONFLICT DO NOTHING` (the unique
   // index is partial, so a named target wouldn't match) so a crash-recovery
   // re-run of the generating event can't double-file the canonical row.
   switch (type) {
-    case "todo":
+    case "todo": {
+      const text = str(payload.text) ?? str(payload.title);
+      if (!text) {
+        console.warn(`[persist] skipping todo proposal ${proposalId} — no text/title in payload`);
+        return;
+      }
       db.insert(schema.todos)
         .values({
           id: randomUUID(),
           userId,
           chapterId: cid,
-          text: payload.text as string,
+          text,
           dueDate: (payload.dueDate as string | undefined) ?? null,
           source: "extracted",
           sourceBriefId: briefId,
@@ -287,13 +309,19 @@ function writePayload(
         .onConflictDoNothing()
         .run();
       return;
-    case "decision":
+    }
+    case "decision": {
+      const title = str(payload.title) ?? str(payload.text);
+      if (!title) {
+        console.warn(`[persist] skipping decision proposal ${proposalId} — no title/text in payload`);
+        return;
+      }
       db.insert(schema.decisions)
         .values({
           id: randomUUID(),
           userId,
           chapterId: cid,
-          title: payload.title as string,
+          title,
           rationale: (payload.rationale as string | undefined) ?? null,
           decidedAt: (payload.decidedAt as string | undefined) ?? now,
           source: "extracted",
@@ -304,15 +332,21 @@ function writePayload(
         .onConflictDoNothing()
         .run();
       return;
+    }
     case "journal_entry":
-    case "journal":
+    case "journal": {
+      const content = str(payload.content) ?? str(payload.text);
+      if (!content) {
+        console.warn(`[persist] skipping journal proposal ${proposalId} — no content/text in payload`);
+        return;
+      }
       db.insert(schema.entries)
         .values({
           id: randomUUID(),
           userId,
           chapterId: cid,
           date: (payload.date as string | undefined) ?? now,
-          content: payload.content as string,
+          content,
           source: (payload.source as never) ?? "manual",
           sourceBriefId: briefId,
           sourceProposalId: proposalId,
@@ -321,6 +355,7 @@ function writePayload(
         .onConflictDoNothing()
         .run();
       return;
+    }
     default:
       return;
   }
