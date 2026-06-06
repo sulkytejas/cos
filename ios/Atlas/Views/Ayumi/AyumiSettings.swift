@@ -80,7 +80,7 @@ struct AyumiSettings: View {
                     .tint(Theme.Palette.forest)
             }
             .padding(.top, 4)
-            Text("Ayumi closes when you step away — only you can open her again.")
+            Text("Ayumi closes when you step away — only you can reopen it.")
                 .font(Theme.Font.sans(12)).foregroundStyle(Theme.Palette.ink3)
 
             // The token budget is enforced + reported by the server gateway

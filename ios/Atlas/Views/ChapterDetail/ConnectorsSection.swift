@@ -5,10 +5,10 @@ import SwiftUI
 //  atlas-trip.css `.conn`).
 //
 //  Two groups: sources Ayumi is ALREADY using (Gmail / Health / Maps —
-//  each with a jade "Feeding" pulse) and sources she'd reach for NEXT
+//  each with a jade "Feeding" pulse) and sources Ayumi would reach for NEXT
 //  (HDFC / IRCTC / Calendar — each with a Connect button + a one-line
 //  payoff). Granting one flips it to "Linked", rewrites its role copy to
-//  what she can now do, and blooms the halo (the parent drives the halo
+//  what Ayumi can now do, and blooms the halo (the parent drives the halo
 //  via `onGrant`). This is "progressive capability via consent".
 // ════════════════════════════════════════════════════════════════════
 
@@ -58,7 +58,7 @@ private struct ChapterConnectorRow: View {
 
     /// Once granted (or already feeding) the row shows the "now I can…" role.
     private var feeding: Bool { connector.status == .feeding || isGranted }
-    /// After granting, the role rewrites to "what she can now do" (the post-grant
+    /// After granting, the role rewrites to "what Ayumi can now do" (the post-grant
     /// `grantedRole`, mirroring the server's grantCopyFor) — NOT the pre-grant
     /// offer (`unlockCopy`). Falls back to `role` when no grantedRole is seeded.
     private var roleCopy: String {

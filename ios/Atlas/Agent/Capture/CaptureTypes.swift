@@ -6,9 +6,9 @@ import Observation
 //
 //  Capture is NOT a screen. It is Ayumi, summoned in place over whatever
 //  surface you're on: a teal cue at the foot of every screen rises into a
-//  co-completion "well". You hand her a *fragment* (typed or spoken); she
-//  ghost-completes it into a structured note + a forming tag, or asks one
-//  sharp question when she can't complete confidently.
+//  co-completion "well". You hand Ayumi a *fragment* (typed or spoken); it's
+//  ghost-completed into a structured note + a forming tag, or Ayumi asks one
+//  sharp question when it can't complete confidently.
 //
 //  This file owns the STATE + a `CaptureController` (@Observable @MainActor)
 //  with the actions the UI binds to. It calls `AtlasRepo` for real

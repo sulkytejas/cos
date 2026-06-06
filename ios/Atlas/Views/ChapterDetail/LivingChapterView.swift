@@ -510,7 +510,7 @@ struct LivingChapterView: View {
             withAnimation(Theme.Motion.standard(0.3)) { spendFlashing = false }
         }
 
-        // Halo: think → deliver (she reconciled).
+        // Halo: think → deliver (Ayumi reconciled).
         halo.setState(.delivered)
 
         // Reconcile through the repo (server-backed; seeded offline) — the
@@ -558,8 +558,8 @@ struct LivingChapterView: View {
         // Bloom the halo — progressive capability via consent.
         halo.setState(.delivered)
         // Grant through the repo (server-backed; no-op offline). On the server
-        // path she returns the rewritten role/unlock copy; adopt it so the row
-        // reads what she can now do (the ConnectorsSection already flipped it to
+        // path Ayumi returns the rewritten role/unlock copy; adopt it so the row
+        // reads what Ayumi can now do (the ConnectorsSection already flipped it to
         // "Linked" optimistically via `granted`).
         Task {
             guard let copy = await repo.grantConnector(conn.id) else { return }
@@ -567,7 +567,7 @@ struct LivingChapterView: View {
                 withAnimation(Theme.Motion.standard(0.3)) {
                     trip.connectors[idx].role = copy.role
                     // The post-grant role the row shows is `grantedRole`; adopt the
-                    // server's authoritative "what she can now do" copy there too.
+                    // server's authoritative "what Ayumi can now do" copy there too.
                     trip.connectors[idx].grantedRole = copy.role
                     trip.connectors[idx].unlockCopy = copy.unlockCopy
                     trip.connectors[idx].status = .feeding

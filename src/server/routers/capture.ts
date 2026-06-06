@@ -9,7 +9,7 @@ import { events } from "@/db/schema";
  * Capture router (v0.7 — co-completion) — SCAFFOLD STUB.
  *
  * Backs the global "well" sheet summoned from any screen (design handoff PART 1).
- * The user hands Ayumi a *fragment*; she completes it into a structured note and
+ * The user hands Ayumi a *fragment*; Ayumi completes it into a structured note and
  * files it. This router exposes the two halves of that loop:
  *
  *  - `complete({ fragment })` → `{ ghost, kind, chapterId?, question? }`
@@ -45,7 +45,7 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 /**
  * The completion shape the well consumes. `ghost` is the suggested remainder,
  * `kind` the forming tag's kind, `chapterId` the inferred home chapter (null when
- * she'd auto-file), `question` the single low-confidence clarifier (or null), and
+ * Ayumi would auto-file), `question` the single low-confidence clarifier (or null), and
  * `confidence` (0..1) drives whether the well settles the tag or asks.
  */
 const CaptureCompletion = z.object({

@@ -217,7 +217,7 @@ struct TodayScreen: View {
                         // Render the connector line ONLY for a source the in-place
                         // CONNECT sheet can actually grant (gmail | calendar |
                         // drive — the server's OAuth `z.enum`). The worker may name
-                        // any source she observes a gap for; an UNSUPPORTED one
+                        // any source Ayumi observes a gap for; an UNSUPPORTED one
                         // (e.g. "whatsapp") is never shown as a CTA — it is logged
                         // server-side to the dev wishlist instead, so the line never
                         // makes a promise the sheet can't keep.
@@ -225,7 +225,7 @@ struct TodayScreen: View {
                         // NEWEST morning only: consecutive unconnected mornings each
                         // persist the same suggestion on their turn row; rendering
                         // every one would stack identical CONNECT CTAs down the
-                        // thread. Her ask appears once, on the latest morning.
+                        // thread. The ask appears once, on the latest morning.
                         if turn.id == morningTurn?.id,
                            let connector = turn.connector, Self.grantableSources.contains(connector.source) {
                             connectorLine(connector)
@@ -304,8 +304,8 @@ struct TodayScreen: View {
         let fed = fedSources.contains(connector.source)
         Group {
             if fed {
-                // Granted — a quiet, non-tappable state. The subject is HER world
-                // ("She can see it now."), never the machinery.
+                // Granted — a quiet, non-tappable state. The subject is Ayumi's
+                // world ("Ayumi can see it now."), never the machinery.
                 VStack(alignment: .leading, spacing: 6) {
                     Text(connector.copy)
                         .font(Theme.Font.serifItalic(14.5))
@@ -787,7 +787,7 @@ private struct ConnectorSheet: View {
                 .foregroundStyle(Theme.Palette.ink3)
                 .padding(.bottom, 14)
 
-            // Her copy — the suggestion's prose, parsed through the shared Ayumi
+            // Ayumi's copy — the suggestion's prose, parsed through the shared Ayumi
             // grammar so *roman*/==accent== runs render exactly as elsewhere.
             VStack(alignment: .leading, spacing: 10.7) {
                 ForEach(Array(parseAyumiMarkup(connector.copy).enumerated()), id: \.offset) { _, runs in
@@ -826,7 +826,7 @@ private struct ConnectorSheet: View {
             }
 
             // A quiet plain dismiss — mono, ink3 — hidden once fed (the FED state
-            // is terminal; she closes via the drag indicator).
+            // is terminal; the user closes via the drag indicator).
             if phase != .fed {
                 Button { dismiss() } label: {
                     Text("not now")
@@ -902,7 +902,7 @@ private struct ConnectorSheet: View {
         phase = .connecting
         openURL(url)
         // Poll every 2s, bounded ~120s. The view's `.task` is cancelled on
-        // disappear, so this loop unwinds if she closes the sheet mid-grant.
+        // disappear, so this loop unwinds if the user closes the sheet mid-grant.
         for _ in 0..<60 {
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             if Task.isCancelled { return }
@@ -912,7 +912,7 @@ private struct ConnectorSheet: View {
                 return
             }
         }
-        // Timed out without a grant — fall back to the button so she can retry.
+        // Timed out without a grant — fall back to the button so the user can retry.
         phase = .idle
     }
 

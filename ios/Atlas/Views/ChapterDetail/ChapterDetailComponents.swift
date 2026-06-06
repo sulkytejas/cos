@@ -4,7 +4,7 @@ import SwiftUI
 //  Shared primitives for the Living Chapter (v0.7, North India).
 //
 //  Faithful ports of the small reusable pieces in atlas-trip.css that
-//  several sections need: the provenance "how she knows it" chip, the
+//  several sections need: the provenance "how Ayumi knows it" chip, the
 //  section scaffold (mono label + a "how I know" cite pill), the recs
 //  cards, the live-tracking cards, the receipts thread, and the dark
 //  "ripple" toast a correction emits.
@@ -15,7 +15,7 @@ import SwiftUI
 
 // MARK: - Provenance chip — `.know.booked/.inferred/.live/.told`
 
-/// "How she knows it" — the provenance chip on every fact (README: always show
+/// "How Ayumi knows it" — the provenance chip on every fact (README: always show
 /// provenance). booked = solid green, inferred = dashed teal, live = teal,
 /// told = dark "you told me" (highest authority, set after a correction).
 struct ProvenanceChip: View {

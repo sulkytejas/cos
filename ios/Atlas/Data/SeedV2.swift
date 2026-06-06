@@ -436,7 +436,7 @@ enum SeedV2 {
             // The connector suggestion opens Today's in-place CONNECT sheet — the
             // same generic surface for any supported source (gmail|calendar|drive),
             // so any of the three is a valid seed. We pick Calendar because this
-            // morning's concrete gap is the rest of her day around Karan's 14:30
+            // morning's concrete gap is the rest of the day around Karan's 14:30
             // invite, which Calendar is exactly what would close.
             connector: TurnConnector(
                 source: "calendar",

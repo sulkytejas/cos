@@ -24,7 +24,7 @@ import { tripState, tripPreferences } from "@/db/schema";
  *    breakdown, PERSIST a learned preference so the next render leads differently.
  *  - `grantConnector({ id })` → `{ status, role, unlockCopy, needsRederive }`
  *    Consent for a source (HDFC / IRCTC / Calendar): flip available→feeding,
- *    rewrite what she can now do, and mark the chapter for re-derivation.
+ *    rewrite what Ayumi can now do, and mark the chapter for re-derivation.
  *
  * All procedures are `protectedProcedure` + Zod-validated + scoped to
  * `ctx.userId`; persisted state lives in SQLite (`trip_state`,
@@ -793,7 +793,7 @@ export const tripRouter = router({
    * Grant a connector (consent for a source).
    *
    * Flips the source available→feeding, rewrites its role + unlock copy to what
-   * she can now do, persists the grant, and marks the chapter for re-derivation
+   * Ayumi can now do, persists the grant, and marks the chapter for re-derivation
    * (so a real build would backfill the granted source and re-derive the affected
    * sections — spend itemisation, live seats, return planning). Idempotent.
    */

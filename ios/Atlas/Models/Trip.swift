@@ -14,7 +14,7 @@ import Foundation
 //  §PART 2 + atlas-trip.css. Every field maps to a styled element there.
 // ════════════════════════════════════════════════════════════════════
 
-// MARK: - Provenance — "how she knows it"
+// MARK: - Provenance — "how Ayumi knows it"
 
 /// The provenance chip on every fact (README: "always show provenance").
 /// Maps to `.know.booked` / `.know.inferred` / `.know.live` in atlas-trip.css,
@@ -201,7 +201,7 @@ struct Connector: Codable, Identifiable, Hashable {
     let id: String
     /// Display name, e.g. "Gmail" / "HDFC card".
     var name: String
-    /// The italic role line — what she does with it *now* (when feeding) or the
+    /// The italic role line — what Ayumi does with it *now* (when feeding) or the
     /// neutral description (when available).
     var role: String
     /// `.feeding` (already in use, jade pulse) vs `.available` (offer a Connect).
@@ -209,7 +209,7 @@ struct Connector: Codable, Identifiable, Hashable {
     /// One concrete line stating exactly what connecting it would unlock. Shown
     /// for `.available` as the pre-grant OFFER.
     var unlockCopy: String
-    /// The POST-grant role — "what she can now do" (mirrors the server's
+    /// The POST-grant role — "what Ayumi can now do" (mirrors the server's
     /// `grantCopyFor`). Shown after granting instead of reusing the pre-grant
     /// offer copy. Empty for already-feeding sources (their `role` is already current).
     var grantedRole: String

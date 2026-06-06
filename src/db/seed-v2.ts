@@ -867,7 +867,7 @@ function seedTurnsAndChurnBrief() {
         createdAt: t3At,
         updatedAt: t3At,
       },
-      // T4 — her follow-up, embedding the churn-slide brief.
+      // T4 — Ayumi's follow-up, embedding the churn-slide brief.
       {
         id: id(),
         role: "ayumi",

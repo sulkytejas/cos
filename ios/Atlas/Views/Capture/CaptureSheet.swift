@@ -186,7 +186,7 @@ struct CaptureSheet: View {
     @ViewBuilder
     private var acceptHint: some View {
         let text: String? = {
-            if controller.mode == .text, controller.hasGhost { return "tap her grey completion to accept · keep typing to override" }
+            if controller.mode == .text, controller.hasGhost { return "tap the grey completion to accept · keep typing to override" }
             if controller.locked { return "accepted · edit freely, then capture" }
             return nil
         }()
@@ -316,7 +316,7 @@ struct CaptureSheet: View {
 
 // MARK: - One-question card (README §"A one-question card")
 
-/// Appears only when she can't complete confidently: Ayumi avatar + "Ayumi
+/// Appears only when Ayumi can't complete confidently: Ayumi avatar + "Ayumi
 /// asks", an italic question, 2 answer chips, and an `ignore`. Answering files
 /// with that answer attached.
 struct QuestionCard: View {

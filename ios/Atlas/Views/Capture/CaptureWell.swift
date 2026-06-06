@@ -10,7 +10,7 @@ import SwiftUI
 //  a match clears it (README §"Co-completion model").
 //
 //  In voice mode the field shows the streaming transcript (forest = your ink,
-//  teal = her interjections) and the PenLine ink stroke is drawn along the
+//  teal = Ayumi's interjections) and the PenLine ink stroke is drawn along the
 //  base of the well. Both modes share this one field, exactly as the proto's
 //  `#field` is reused for typing + the scripted voice transcript.
 //
@@ -22,7 +22,7 @@ struct CaptureWell: View {
     /// A hidden text field is the keyboard surface for text mode; this binding
     /// mirrors `controller.draft` and drives `onType`.
     @FocusState.Binding var fieldFocused: Bool
-    /// The live transcript runs for voice mode (forest user ink + teal her ink).
+    /// The live transcript runs for voice mode (forest user ink + teal Ayumi ink).
     var voiceRuns: [CaptureVoiceRun]
     /// Whether the well is in voice mode (shows PenLine, hides the keyboard field).
     var isVoice: Bool
@@ -131,16 +131,16 @@ struct CaptureWell: View {
         }
     }
 
-    /// Forest = your ink, teal = her interjections (prefixed with an em-dash,
+    /// Forest = your ink, teal = Ayumi's interjections (prefixed with an em-dash,
     /// matching `.field .int::before { content:'— ' }`).
     private var voiceComposite: some View {
         var out = AttributedString()
         for run in voiceRuns {
-            var a = AttributedString(run.kind == .her ? "— \(run.text) " : run.text)
+            var a = AttributedString(run.kind == .ayumi ? "— \(run.text) " : run.text)
             a.font = .custom(Theme.Typeface.serifRegular, size: 18)
             switch run.kind {
             case .you: a.foregroundColor = Theme.Palette.ink     // your ink reads as primary
-            case .her: a.foregroundColor = Theme.Palette.tealDeep
+            case .ayumi: a.foregroundColor = Theme.Palette.tealDeep
             }
             out += a
         }
@@ -153,9 +153,9 @@ struct CaptureWell: View {
 
 // MARK: - Voice transcript run
 
-/// One run of the voice transcript: your ink (forest) or her interjection (teal).
+/// One run of the voice transcript: your ink (forest) or Ayumi's interjection (teal).
 struct CaptureVoiceRun: Identifiable, Hashable {
-    enum Kind { case you, her }
+    enum Kind { case you, ayumi }
     let id = UUID()
     var text: String
     var kind: Kind
@@ -166,7 +166,7 @@ struct CaptureVoiceRun: Identifiable, Hashable {
 /// The PenLine — an animated fountain-pen ink stroke drawn along the base of
 /// the well in voice mode (README §"Voice duet"; ports the canvas RAF loop in
 /// `atlas-capture.js startPen`). A forest stroke (your ink) swells with the
-/// speech envelope; a teal stroke (her ink) flares during interjections.
+/// speech envelope; a teal stroke (Ayumi's ink) flares during interjections.
 /// Honours Reduce Motion by drawing a static settled stroke.
 struct PenLineView: View {
     var reduceMotion: Bool

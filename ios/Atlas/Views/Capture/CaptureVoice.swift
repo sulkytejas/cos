@@ -6,10 +6,10 @@ import SwiftUI
 //  Tapping the mic switches the well to voice: the mic pulses `--forest`, the
 //  PenLine ink stroke is drawn along the base of the well (in CaptureWell),
 //  and a transcript streams in. Ayumi can interject inline in teal ("how
-//  tight?", "logged"). When the user stops, she forms the structure and may
+//  tight?", "logged"). When the user stops, Ayumi forms the structure and may
 //  ask the one question. A toggle exposes the behaviour choice:
 //  Settle-to-text (transcript becomes editable, user taps Send) vs Hands-free
-//  (auto-sends on stop). Forest = your ink, teal = her ink.
+//  (auto-sends on stop). Forest = your ink, teal = Ayumi's ink.
 //
 //  Scripted against the seed for now (real = speech-to-text). This object owns
 //  ONLY the voice script + the streamed runs; it drives the shared
@@ -19,20 +19,20 @@ import SwiftUI
 
 /// Drives the scripted voice duet. Observable so the sheet re-renders as runs
 /// stream in and the source-hint timer ticks. Mirrors the proto's `mic` click
-/// handler: three transcript beats, then she forms the structure + asks.
+/// handler: three transcript beats, then Ayumi forms the structure + asks.
 @MainActor
 @Observable
 final class CaptureVoiceSession {
-    /// The streamed transcript runs (forest you-ink + teal her-ink).
+    /// The streamed transcript runs (forest you-ink + teal Ayumi-ink).
     private(set) var runs: [CaptureVoiceRun] = []
     /// The source hint shown in the controls row ("0:24 · paused").
     private(set) var sourceHint = "type or speak"
-    /// True once she has finished forming + (in Settle) is waiting for Send.
+    /// True once Ayumi has finished forming + (in Settle) is waiting for Send.
     private(set) var settled = false
 
     @ObservationIgnored private var tasks: [Task<Void, Never>] = []
 
-    /// Start the scripted duet over `controller`. On the final beat she forms a
+    /// Start the scripted duet over `controller`. On the final beat Ayumi forms a
     /// `note · Stratyfix · journal` match and asks the one runway question
     /// (Settle), or files hands-free.
     func start(controller: CaptureController,
@@ -50,16 +50,16 @@ final class CaptureVoiceSession {
         schedule(after: 1.30) {
             self.runs = [
                 .init(text: "I’m worried the runway math is tighter than we’re saying", kind: .you),
-                .init(text: "how tight?", kind: .her),
+                .init(text: "how tight?", kind: .ayumi),
             ]
         }
         schedule(after: 2.60) {
             self.runs = [
                 .init(text: "I’m worried the runway math is tighter than we’re saying — maybe nine months, not twelve", kind: .you),
-                .init(text: "logged", kind: .her),
+                .init(text: "logged", kind: .ayumi),
             ]
         }
-        // She forms the structure, then either asks (Settle) or files (Hands-free).
+        // Ayumi forms the structure, then either asks (Settle) or files (Hands-free).
         schedule(after: 3.80) {
             let match = CaptureMatch(kind: .note, chapterId: "stratyfix", tag: "Stratyfix · journal")
             self.sourceHint = "0:24 · paused"

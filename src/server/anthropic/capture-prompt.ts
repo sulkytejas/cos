@@ -2,9 +2,9 @@
  * CAPTURE CO-COMPLETION — shared prompt + parser (Module MC).
  *
  * The "well" sheet (design handoff PART 1) hands Ayumi a *fragment* (typed or
- * spoken); she (a) GHOST-completes it into a full structured note and (b)
+ * spoken); Ayumi (a) GHOST-completes it into a full structured note and (b)
  * CLASSIFIES it — kind ∈ {todo,decision,note} + the best-matching chapter — and,
- * only when she isn't confident, asks EXACTLY ONE clarifying question.
+ * only when not confident, asks EXACTLY ONE clarifying question.
  *
  * This file is the single source of truth for that prompt so both halves of the
  * round-trip agree on its shape:
@@ -43,9 +43,9 @@ export interface CaptureCompletionResult {
   /** The italic remainder the well renders after the fragment (NOT the fragment). */
   ghost: string;
   kind: CaptureKind;
-  /** Inferred home chapter id, or null when she'd auto-file at the top level. */
+  /** Inferred home chapter id, or null when Ayumi would auto-file at the top level. */
   chapterId: string | null;
-  /** The single low-confidence clarifier, or null when she's confident. */
+  /** The single low-confidence clarifier, or null when Ayumi is confident. */
   question: { text: string; answers: string[] } | null;
   /** 0..1 — drives whether the well shows the forming tag as settled or asks. */
   confidence: number;
