@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Atlas — The Whole Plan (dev)</title>
+<style>
+  :root {
+    --paper:   #f6f2e9;
+    --paper-2: #efe9dc;
+    --ink:     #1b1813;
+    --ink-2:   #4a443a;
+    --muted:   #8a8276;
+    --line:    #d8d0bf;
+    --accent:  #b3402a;
+    --green:   #4a7c59;
+    --amber:   #b8860b;
+    --blue:    #3a6ea5;
+    --mono: "SF Mono", ui-monospace, "Cascadia Mono", Menlo, monospace;
+    --serif: Georgia, "Iowan Old Style", "Times New Roman", serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--paper); color: var(--ink); font-family: var(--serif); line-height: 1.55; padding: 48px 24px 120px; }
+  .sheet { max-width: 980px; margin: 0 auto; }
+  .kicker { font-family: var(--mono); font-size: 11px; letter-spacing: .18em; text-transform: uppercase; color: var(--accent); }
+  h1 { font-size: 36px; font-weight: 600; margin: 6px 0 2px; }
+  .subtitle { font-size: 16.5px; font-style: italic; color: var(--ink-2); margin-bottom: 16px; }
+  .meta-line { font-family: var(--mono); font-size: 11.5px; color: var(--muted); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 8px 0; display: flex; gap: 24px; flex-wrap: wrap; margin-bottom: 26px; }
+  .meta-line b { color: var(--ink); font-weight: 600; }
+
+  /* progress bar */
+  .progress { display:flex; align-items:center; gap:14px; margin-bottom: 26px; }
+  .bar { flex:1; height: 8px; background: var(--paper-2); border: 1px solid var(--line); border-radius: 99px; overflow: hidden; }
+  .bar i { display:block; height:100%; background: var(--green); width: 44%; }
+  .progress span { font-family: var(--mono); font-size: 11px; color: var(--ink-2); }
+
+  /* phase nav pills */
+  nav.phases { position: sticky; top: 0; background: var(--paper); padding: 12px 0; display: flex; gap: 8px; flex-wrap: wrap; z-index: 5; border-bottom: 1px solid var(--line); margin-bottom: 30px; }
+  nav.phases a { font-family: var(--mono); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; text-decoration: none; color: var(--ink-2); border: 1.5px solid var(--line); border-radius: 999px; padding: 4px 11px; background: #fffdf7; }
+  nav.phases a:hover { border-color: var(--ink); color: var(--ink); }
+  nav.phases a.done { border-color: var(--green); color: var(--green); }
+  nav.phases a.next { border-color: var(--accent); color: var(--accent); font-weight: 700; }
+
+  .chip { font-family: var(--mono); font-size: 10px; letter-spacing: .1em; text-transform: uppercase; padding: 2px 9px; border-radius: 999px; border: 1.5px solid; white-space: nowrap; }
+  .chip.done    { color: #fff; border-color: var(--green); background: var(--green); }
+  .chip.tobuild { color: var(--accent); border-color: var(--accent); background: #b3402a10; }
+  .chip.next    { color: #fff; border-color: var(--accent); background: var(--accent); }
+  .chip.design  { color: var(--blue); border-color: var(--blue); background: #3a6ea514; }
+  .chip.parked  { color: var(--amber); border-color: var(--amber); background: transparent; }
+
+  /* the accordion phases */
+  .phase { border: 1.5px solid var(--ink); background: #fffdf7; margin-bottom: 16px; }
+  .phase-head { display: flex; align-items: baseline; gap: 14px; padding: 14px 18px; cursor: pointer; user-select: none; background: var(--paper-2); }
+  .phase-head:hover { background: #ece5d4; }
+  .phase-num { font-family: var(--mono); font-size: 12px; font-weight: 700; color: var(--accent); min-width: 18px; }
+  .phase-title { font-size: 17.5px; font-weight: 700; flex: 1; }
+  .phase-one-liner { font-style: italic; font-size: 13px; color: var(--muted); }
+  .caret { font-family: var(--mono); color: var(--muted); transition: transform .15s ease; }
+  .phase.open .caret { transform: rotate(90deg); }
+  .phase-body { display: none; padding: 16px 20px 18px; border-top: 1.5px solid var(--ink); }
+  .phase.open .phase-body { display: block; }
+  .phase-body p { font-size: 14.5px; color: var(--ink-2); max-width: 76ch; margin-bottom: 12px; }
+  .phase-body p b { color: var(--ink); }
+  .steps { margin: 14px 0 6px; }
+  .step { display: grid; grid-template-columns: 26px 1fr; gap: 12px; padding: 10px 0; border-top: 1px dotted var(--line); font-size: 13.8px; }
+  .step:first-child { border-top: 0; }
+  .step .n { font-family: var(--mono); font-size: 11px; color: var(--muted); padding-top: 2px; }
+  .step .what b { display: block; font-size: 14px; color: var(--ink); margin-bottom: 2px; }
+  .step .what span { color: var(--ink-2); }
+  .yousee { margin-top: 14px; font-size: 13px; color: var(--green); border-top: 1px solid var(--line); padding-top: 10px; }
+  .yousee::before { content: "WHAT YOU'LL SEE WHEN IT'S DONE — "; font-family: var(--mono); font-size: 10px; letter-spacing: .08em; }
+  .links { margin-top: 12px; font-family: var(--mono); font-size: 11.5px; }
+  .links a { color: var(--blue); }
+  .footnote { margin-top: 48px; border-top: 1px solid var(--line); padding-top: 12px; font-size: 12px; font-style: italic; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="sheet">
+  <div class="kicker">Atlas COS · internal dev document — not a product surface</div>
+  <h1>The Whole Plan</h1>
+  <div class="subtitle">Every phase of Ayumi, in plain words. Click a phase to open it. Memory was one phase — here are all of them.</div>
+  <div class="meta-line">
+    <span>updated: <b>2026-06-07</b></span>
+    <span>shipped: <b>phases 1–3 + half of 4</b></span>
+    <span>recommended next: <b>phase 4, then 7</b></span>
+  </div>
+
+  <div class="progress"><div class="bar"><i></i></div><span>roughly 45% of the whole product is built and proven</span></div>
+
+  <nav class="phases">
+    <a href="#p1" class="done">1 · skeleton</a>
+    <a href="#p2" class="done">2 · mornings</a>
+    <a href="#p3" class="done">3 · memory</a>
+    <a href="#p4" class="next">4 · talking back</a>
+    <a href="#p5">5 · the voice</a>
+    <a href="#p6">6 · the notebook room</a>
+    <a href="#p7">7 · real life</a>
+    <a href="#p8">8 · eyes &amp; hands</a>
+    <a href="#p9">9 · housekeeping</a>
+  </nav>
+
+  <!-- ─────────────── PHASE 1 ─────────────── -->
+  <div class="phase" id="p1">
+    <div class="phase-head"><span class="caret">›</span><span class="phase-num">1</span><span class="phase-title">The skeleton</span><span class="phase-one-liner">the app and the server speak</span><span class="chip done">shipped</span></div>
+    <div class="phase-body">
+      <p>The bones everything else stands on. The phone app and the server share one truth: whatever happens on one side shows up on the other within seconds. The server keeps the real records; the phone keeps a fast mirror so every screen opens instantly, even offline. A night worker runs on the server and does the heavy thinking so your phone never has to.</p>
+      <p><b>This is done and battle-tested.</b> Crashes recover cleanly, the same action sent twice never files twice, and the phone pairs with a token only you hold.</p>
+      <div class="yousee">already true — open the app, everything is live data, nothing is hardcoded.</div>
+    </div>
+  </div>
+
+  <!-- ─────────────── PHASE 2 ─────────────── -->
+  <div class="phase" id="p2">
+    <div class="phase-head"><span class="caret">›</span><span class="phase-num">2</span><span class="phase-title">The mornings</span><span class="phase-one-liner">she works the night, you read a letter</span><span class="chip done">shipped</span></div>
+    <div class="phase-body">
+      <p>Every night the worker reads what arrived — mail, meetings, documents — prepares briefs for anything that deserves preparation, and writes you <b>one morning letter</b>: a verdict on the day, a short memo, and everything it held for your decision.</p>
+      <p>The review is now a single written page. You mark it with one pen — <b>strike any word or any whole thought</b> — and the review ends when you put the letter down: struck things are declined, untouched things quietly file themselves, and the page collapses to a small "KEPT" stamp until tomorrow. No buttons, no card stacks, no approve-all.</p>
+      <div class="yousee">already true — this is today's Review screen.</div>
+    </div>
+  </div>
+
+  <!-- ─────────────── PHASE 3 ─────────────── -->
+  <div class="phase" id="p3">
+    <div class="phase-head"><span class="caret">›</span><span class="phase-num">3</span><span class="phase-title">Memory</span><span class="phase-one-liner">she keeps a notebook, and she bets on it</span><span class="chip done">shipped</span></div>
+    <div class="phase-body">
+      <p>Ayumi keeps a notebook. Each night it writes a few small notes about your world — who runs late, what someone keeps pushing on, what changed — every note backed by the actual emails that prove it. Wrong notes get end-dated, never deleted, so a forgotten thing can never sneak back. Your strike on a memo line reaches all the way down and makes the note behind it forgotten.</p>
+      <p>On top of the notebook sits the part nobody else has: <b>predictions</b>. Each night Ayumi places a few small bets — "Karan replies by Thursday, 78% sure" — and reality grades them. Right bets strengthen the notes they came from; wrong bets weaken them. There's an honest running score, and when it's been overconfident, it starts hedging exactly there.</p>
+      <p>Proven with a full three-week rehearsal: notes appeared with receipts, junk was rejected, a contradiction corrected itself, a bet was graded, a strike made something stay forgotten.</p>
+      <p><i>Saved for later, with written triggers:</i> notes that fade if life stops confirming them · a weekly "who you are" page · a per-topic scorecard · noticing when what you say and what you do disagree.</p>
+      <div class="links">detail pages: <a href="Atlas Memory Layer - Today Build Plan (dev).html">the memory build plan</a> · <a href="Atlas Memory v2 - The Theory of You (dev).html">the theory of you</a></div>
+      <div class="yousee">already true — "Karan at 14:30 is prepared — cohort curve first, twenty real minutes, not thirty."</div>
+    </div>
+  </div>
+
+  <!-- ─────────────── PHASE 4 ─────────────── -->
+  <div class="phase open" id="p4">
+    <div class="phase-head"><span class="caret">›</span><span class="phase-num">4</span><span class="phase-title">Talking back — finishing the home screen</span><span class="phase-one-liner">the thread becomes a conversation</span><span class="chip next">build next</span></div>
+    <div class="phase-body">
+      <p>Today's home screen is <b>half done</b>. The half that works: you wake up to a real morning letter, see the brief cards, strike the memo, get nudged to connect a missing source. The half that's missing: <b>you can't talk back.</b> The thread looks like a conversation but only one side ever speaks.</p>
+      <div class="steps">
+        <div class="step"><span class="n">4.1</span><div class="what"><b>The reply rail</b><span>Type under any turn and Ayumi answers right there in the thread, with the notebook in hand — not a separate chat screen, the same page. While it thinks, a small transient "reading the deck…" beat shows, then dissolves into the answer.</span></div></div>
+        <div class="step"><span class="n">4.2</span><div class="what"><b>Ghost replies</b><span>Ayumi already knows the two things you're most likely to say back — so it writes them ahead of you, as faint ink under its message. Tap one and it sends. Most mornings you never type at all. This replaces the compose box as the main way of answering.</span></div></div>
+        <div class="step"><span class="n">4.3</span><div class="what"><b>Margin notes</b><span>Press a single sentence in any turn and reply to exactly that sentence — the answer comes back anchored to it, like writing in a book's margin. Same idea as the word-level pen, applied to conversation.</span></div></div>
+        <div class="step"><span class="n">4.4</span><div class="what"><b>Held questions surface as turns</b><span>When Ayumi held something overnight that genuinely needs your answer, the question itself appears as its own turn in the thread — with its two answers as tappable words — instead of hiding in a queue.</span></div></div>
+      </div>
+      <div class="yousee">you reply "push it to Friday" under the morning letter and Ayumi answers in-thread ten seconds later, having actually moved the thing — and most days you answer by tapping ghost ink, not typing.</div>
+    </div>
+  </div>
+
+  <!-- ─────────────── PHASE 5 ─────────────── -->
+  <div class="phase" id="p5">
+    <div class="phase-head"><span class="caret">›</span><span class="phase-num">5</span><span class="phase-title">The voice</span><span class="phase-one-liner">hold, speak, it's filed</span><span class="chip tobuild">to build</span></div>
+    <div class="phase-body">
+      <p>The capture well already works for typing: half a thought in, Ayumi completes it, files it under the right chapter. The voice path is currently a <b>scripted demo</b> — it plays three hardcoded lines and no real listening happens.</p>
+      <div class="steps">
+        <div class="step"><span class="n">5.1</span><div class="what"><b>Real speech-to-text</b><span>Apple's on-device recognizer (nothing leaves the phone for transcription). Hold the well, talk naturally, watch your words appear as you say them.</span></div></div>
+        <div class="step"><span class="n">5.2</span><div class="what"><b>Same completion brain</b><span>The transcript flows into the exact same completion → classification → filing path the typed capture already uses. No new machinery — just a new mouth.</span></div></div>
+      </div>
+      <div class="yousee">walking out of a meeting you hold the well and say "Karan wants the cohort table before Thursday" — by the time you've pocketed the phone it's a todo under Stratyfix.</div>
+    </div>
+  </div>
+
+  <!-- ─────────────── PHASE 6 ─────────────── -->
+  <div class="phase" id="p6">
+    <div class="phase-head"><span class="caret">›</span><span class="phase-num">6</span><span class="phase-title">The notebook room</span><span class="phase-one-liner">"what Ayumi knows" — read its mind, strike its beliefs</span><span class="chip design">with designer</span></div>
+    <div class="phase-body">
+      <p>The only screen that shows Ayumi's <b>beliefs</b> instead of its conclusions. The cheat sheet it carries into every thought, the open bets with their honest score, then the notebook grouped by person — every note one plain sentence with its proof one tap away. Strike a note and it's forgotten; nothing is ever editable, only forgettable.</p>
+      <p>You reach it three ways: through the avatar's nav menu like any room; by pressing a person's <b>name</b> anywhere (opens at their page); or by tapping "person notes" in a letter's source line (opens at the evidence).</p>
+      <p>The full designer brief is written — layout, idiom rules, states, what it must never become. Build starts when the design lands.</p>
+      <div class="yousee">you press "Karan" in the morning letter and see the five things Ayumi believes about him, how often life confirmed each one, and the emails that prove them.</div>
+    </div>
+  </div>
+
+  <!-- ─────────────── PHASE 7 ─────────────── -->
+  <div class="phase" id="p7">
+    <div class="phase-head"><span class="caret">›</span><span class="phase-num">7</span><span class="phase-title">Real life</span><span class="phase-one-liner">your real mail, your real phone, a real 6am</span><span class="chip parked">decision parked</span></div>
+    <div class="phase-body">
+      <p>Everything so far runs against rehearsal data on a laptop. This phase moves Ayumi to a small rented server (about ₹400/month) with a proper address, so three things become real at once:</p>
+      <div class="steps">
+        <div class="step"><span class="n">7.1</span><div class="what"><b>Your real phone connects</b><span>The app only talks over secure connections, which a laptop can't offer the outside world. A real server can — pair once, carry Ayumi in your pocket.</span></div></div>
+        <div class="step"><span class="n">7.2</span><div class="what"><b>Your real Gmail, Calendar and Drive</b><span>The connect buttons already exist and the plumbing is written — Google just refuses to talk to a laptop. With a public address, tapping CONNECT GMAIL actually works, and Ayumi reads your real correspondence (passwords never stored, tokens encrypted).</span></div></div>
+        <div class="step"><span class="n">7.3</span><div class="what"><b>The 6am is a real 6am</b><span>The night worker runs while you sleep instead of when we poke it. Plus automatic backups of the database every few minutes.</span></div></div>
+      </div>
+      <p><i>Why parked:</i> it's a one-time ~2-hour setup but needs your accounts (server, domain, Google console). The moment it happens, Ayumi stops being a thing we build and becomes a thing you live with.</p>
+      <div class="yousee">you wake up at 7, open your own phone, and the letter is about your actual day — written at 6 while you slept.</div>
+    </div>
+  </div>
+
+  <!-- ─────────────── PHASE 8 ─────────────── -->
+  <div class="phase" id="p8">
+    <div class="phase-head"><span class="caret">›</span><span class="phase-num">8</span><span class="phase-title">Eyes and hands</span><span class="phase-one-liner">she can look things up and do things</span><span class="chip tobuild">later</span></div>
+    <div class="phase-body">
+      <div class="steps">
+        <div class="step"><span class="n">8.1</span><div class="what"><b>Web eyes</b><span>Right now if Ayumi wants to check something on the internet, the tool politely returns nothing. Real search and page-reading lets briefs cite the outside world — "their fund announced a new partner yesterday."</span></div></div>
+        <div class="step"><span class="n">8.2</span><div class="what"><b>Living chapters for everything</b><span>The North India trip page — the one that corrects itself when you say "no, I took the bus" — is the pattern. Apply it beyond the demo trip, so any chapter can grow its own living page from its palette.</span></div></div>
+        <div class="step"><span class="n">8.3</span><div class="what"><b>Doing, not just drafting</b><span>Today Ayumi drafts replies and todos for you to send. The far end of this phase is sending on your standing instruction — only ever where you've explicitly said "things like this, just send."</span></div></div>
+      </div>
+      <div class="yousee">a brief that quotes yesterday's news next to your own mail, and a chapter page that builds itself.</div>
+    </div>
+  </div>
+
+  <!-- ─────────────── PHASE 9 ─────────────── -->
+  <div class="phase" id="p9">
+    <div class="phase-head"><span class="caret">›</span><span class="phase-num">9</span><span class="phase-title">Housekeeping</span><span class="phase-one-liner">small debts, paid before they grow</span><span class="chip tobuild">now-ish</span></div>
+    <div class="phase-body">
+      <div class="steps">
+        <div class="step"><span class="n">9.1</span><div class="what"><b>Save the work</b><span>Two days of building sit uncommitted. Commit in clean pieces so every step is recoverable.</span></div></div>
+        <div class="step"><span class="n">9.2</span><div class="what"><b>Rotate the API key</b><span>It was pasted into chat during testing. Five minutes in the console.</span></div></div>
+        <div class="step"><span class="n">9.3</span><div class="what"><b>Sweep the dead code</b><span>The old card-stack review UI is still in the file, unused. Remove it once the letter feels final.</span></div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="footnote">Atlas COS · the whole plan · lives in /designs next to the memory tracker and the theory-of-you page. Click phase headers to open and close them. Chips get flipped as phases land.</div>
+</div>
+
+<script>
+  // Click a phase header to open/close it. Nav pills scroll to the phase and open it.
+  document.querySelectorAll('.phase-head').forEach(function (head) {
+    head.addEventListener('click', function () {
+      head.parentElement.classList.toggle('open');
+    });
+  });
+  document.querySelectorAll('nav.phases a').forEach(function (pill) {
+    pill.addEventListener('click', function () {
+      var id = pill.getAttribute('href').slice(1);
+      var phase = document.getElementById(id);
+      if (phase) phase.classList.add('open');
+    });
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Atlas — Memory Layer · Today Build Plan (dev)</title>
+<style>
+  /* ── Atlas paper-and-ink, dev edition ─────────────────────────── */
+  :root {
+    --paper:   #f6f2e9;
+    --paper-2: #efe9dc;
+    --ink:     #1b1813;
+    --ink-2:   #4a443a;
+    --muted:   #8a8276;
+    --line:    #d8d0bf;
+    --accent:  #b3402a;   /* vermilion */
+    --green:   #4a7c59;
+    --amber:   #b8860b;
+    --blue:    #3a6ea5;
+    --mono: "SF Mono", ui-monospace, "Cascadia Mono", Menlo, monospace;
+    --serif: Georgia, "Iowan Old Style", "Times New Roman", serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--serif);
+    line-height: 1.5;
+    padding: 48px 24px 120px;
+  }
+  .sheet { max-width: 1060px; margin: 0 auto; }
+
+  /* header */
+  .kicker { font-family: var(--mono); font-size: 11px; letter-spacing: .18em; text-transform: uppercase; color: var(--accent); }
+  h1 { font-size: 34px; font-weight: 600; letter-spacing: -0.01em; margin: 6px 0 2px; }
+  .subtitle { font-size: 16px; font-style: italic; color: var(--ink-2); margin-bottom: 14px; }
+  .meta-line { font-family: var(--mono); font-size: 11.5px; color: var(--muted); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 8px 0; display: flex; gap: 24px; flex-wrap: wrap; }
+  .meta-line b { color: var(--ink); font-weight: 600; }
+
+  section { margin-top: 52px; }
+  h2 { font-size: 13px; font-family: var(--mono); letter-spacing: .16em; text-transform: uppercase; color: var(--ink); border-bottom: 2px solid var(--ink); padding-bottom: 6px; margin-bottom: 18px; display: flex; justify-content: space-between; align-items: baseline; }
+  h2 .h2-note { font-family: var(--serif); font-style: italic; text-transform: none; letter-spacing: 0; font-size: 13px; color: var(--muted); font-weight: 400; }
+  h3 { font-size: 17px; margin: 26px 0 10px; }
+  p.lede { font-size: 15px; color: var(--ink-2); max-width: 72ch; margin-bottom: 16px; }
+  code, .path { font-family: var(--mono); font-size: 0.86em; background: var(--paper-2); padding: 1px 5px; border-radius: 3px; white-space: nowrap; }
+  .path { color: var(--accent); }
+
+  /* status chips — flip these as we build */
+  .chip { font-family: var(--mono); font-size: 10px; letter-spacing: .1em; text-transform: uppercase; padding: 2px 8px; border-radius: 999px; border: 1.5px solid; white-space: nowrap; }
+  .chip.pending  { color: var(--muted);  border-color: var(--muted);  background: transparent; }
+  .chip.progress { color: var(--blue);   border-color: var(--blue);   background: #3a6ea514; }
+  .chip.done     { color: #fff;          border-color: var(--green);  background: var(--green); }
+  .chip.shipped  { color: var(--paper);  border-color: var(--ink);    background: var(--ink); }
+  .chip.tobuild  { color: var(--accent); border-color: var(--accent); background: #b3402a10; }
+  .chip.later    { color: var(--amber);  border-color: var(--amber);  background: transparent; }
+
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; font-size: 12.5px; color: var(--ink-2); margin-bottom: 22px; }
+
+  /* design cards */
+  .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .card { border: 1.5px solid var(--ink); background: #fffdf7; padding: 16px 16px 14px; position: relative; }
+  .card .tbl { font-family: var(--mono); font-size: 13px; font-weight: 700; color: var(--accent); }
+  .card h4 { font-size: 15px; margin: 2px 0 8px; }
+  .card ul { list-style: none; font-size: 13px; color: var(--ink-2); }
+  .card li { padding: 3px 0; border-top: 1px dotted var(--line); }
+  .card li:first-child { border-top: 0; }
+  .card li code { font-size: 11.5px; }
+  .card .why { margin-top: 10px; font-style: italic; font-size: 12.5px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 8px; }
+
+  /* ── flowchart ────────────────────────────────────────────────── */
+  .flow { background: #fffdf7; border: 1.5px solid var(--ink); padding: 28px; }
+  .flow-row-full { margin: 0 auto; max-width: 720px; }
+  .lanes { display: grid; grid-template-columns: 1fr 1fr; gap: 36px; margin-top: 0; }
+  .lane-title { text-align: center; font-family: var(--mono); font-size: 11px; letter-spacing: .2em; text-transform: uppercase; padding: 8px 0 14px; }
+  .lane-title.write { color: var(--accent); }
+  .lane-title.read  { color: var(--blue); }
+
+  .node { border: 1.5px solid var(--ink); background: var(--paper); padding: 12px 14px; position: relative; }
+  .node.new { border-style: dashed; border-color: var(--accent); background: #fffdf7; }
+  .node.feedback { border-color: var(--green); border-style: dashed; background: #4a7c590a; }
+  .node-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 4px; }
+  .node-id { font-family: var(--mono); font-size: 10.5px; color: var(--muted); letter-spacing: .08em; }
+  .node-title { font-size: 14.5px; font-weight: 700; }
+  .node-desc { font-size: 12.8px; color: var(--ink-2); }
+  .node-desc em { color: var(--ink); }
+  .node-files { margin-top: 8px; padding-top: 7px; border-top: 1px dotted var(--line); font-family: var(--mono); font-size: 10.8px; color: var(--muted); line-height: 1.7; }
+  .node-files b { color: var(--accent); font-weight: 600; }
+  .arrow { text-align: center; color: var(--ink-2); font-size: 15px; padding: 5px 0; line-height: 1; }
+  .arrow .lbl { display: block; font-family: var(--mono); font-size: 10px; color: var(--muted); letter-spacing: .06em; padding-bottom: 2px; }
+  .arrow.loop { color: var(--green); }
+
+  /* phases */
+  .phase { border: 1.5px solid var(--ink); background: #fffdf7; margin-bottom: 20px; }
+  .phase-head { display: flex; align-items: baseline; gap: 14px; padding: 13px 18px; border-bottom: 1.5px solid var(--ink); background: var(--paper-2); }
+  .phase-num { font-family: var(--mono); font-size: 12px; font-weight: 700; color: var(--accent); }
+  .phase-title { font-size: 16.5px; font-weight: 700; flex: 1; }
+  .phase-body { padding: 6px 18px 14px; }
+  .step { display: grid; grid-template-columns: 64px 1fr 110px; gap: 14px; padding: 12px 0; border-top: 1px dotted var(--line); align-items: start; }
+  .step:first-child { border-top: 0; }
+  .step-id { font-family: var(--mono); font-size: 11.5px; color: var(--muted); padding-top: 2px; }
+  .step-what { font-size: 13.8px; }
+  .step-what .detail { display: block; color: var(--ink-2); font-size: 12.6px; margin-top: 3px; }
+  .step-what .accept { display: block; font-size: 12.2px; margin-top: 6px; color: var(--green); }
+  .step-what .accept::before { content: "✓ done when: "; font-family: var(--mono); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+  .step-status { justify-self: end; padding-top: 1px; }
+
+  /* decisions + changelog */
+  table.plain { width: 100%; border-collapse: collapse; font-size: 13.3px; }
+  table.plain th { font-family: var(--mono); font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; text-align: left; color: var(--muted); padding: 6px 10px 6px 0; border-bottom: 1.5px solid var(--ink); }
+  table.plain td { padding: 9px 10px 9px 0; border-bottom: 1px dotted var(--line); vertical-align: top; color: var(--ink-2); }
+  table.plain td:first-child { color: var(--ink); font-weight: 600; width: 30%; }
+
+  .changelog li { font-size: 13.3px; color: var(--ink-2); padding: 7px 0; border-bottom: 1px dotted var(--line); list-style: none; }
+  .changelog .d { font-family: var(--mono); font-size: 11px; color: var(--accent); margin-right: 10px; }
+
+  .footnote { margin-top: 56px; border-top: 1px solid var(--line); padding-top: 12px; font-size: 12px; font-style: italic; color: var(--muted); }
+  @media (max-width: 860px) { .lanes { grid-template-columns: 1fr; } .cards { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="sheet">
+
+  <!-- ═══════════════ HEADER ═══════════════ -->
+  <div class="kicker">Atlas COS · internal dev document — not a product surface</div>
+  <h1>Ayumi's Memory</h1>
+  <div class="subtitle">How Ayumi learns things, remembers them, and uses them to write the Today page. Build plan + living progress tracker.</div>
+  <div class="meta-line">
+    <span>locked: <b>2026-06-06</b></span>
+    <span>last updated: <b>2026-06-06</b></span>
+    <span>status: <b>ALL PHASES BUILT — slices A·B·C·P·D done; rehearsal passed</b></span>
+    <span>schema rev: <b>drizzle 0013</b></span>
+  </div>
+
+  <!-- ═══════════════ PRINCIPLE ═══════════════ -->
+  <section>
+    <h2>0 · The idea we locked <span class="h2-note">decided across two sessions, checked against how the big products do it</span></h2>
+    <p class="lede"><strong>Ayumi keeps a notebook.</strong> Every entry is one small note: what Ayumi learned, who it's about, which emails or meetings prove it, and — if it later turns out wrong — the date it stopped being true. The notebook is a normal database table. No graph database, no AI search index. We checked how ChatGPT, Gemini and Claude do memory (June 2026): all three work this same simple way — a background job reads past activity, writes short notes, builds a one-page summary, and pastes that summary into every new conversation. None of them use a graph.</p>
+    <p class="lede"><strong>The rule that makes this safe: save rich data now, build fancy machinery only when something needs it.</strong> If a future feature ever asks a question Ayumi can't answer by just reading the notes — like "trace how this relationship changed over six months, across ten people" — that's the day we build the graph engine. The notes are exactly the raw material it would be built from, so nothing we do now gets thrown away.</p>
+    <div class="legend">
+      <span class="chip shipped">shipped</span><span>already works today</span>
+      <span class="chip tobuild">to build</span><span>new in this plan</span>
+      <span class="chip pending">pending</span>
+      <span class="chip progress">in progress</span>
+      <span class="chip done">done</span>
+      <span class="chip later">later</span><span>on purpose, with a written reason to revisit</span>
+    </div>
+  </section>
+
+  <!-- ═══════════════ THE THREE NEW PIECES ═══════════════ -->
+  <section>
+    <h2>1 · Three new pieces <span class="h2-note">all follow the house rules every table already uses: uuid id · userId · created/updated · soft delete</span></h2>
+    <div class="cards">
+      <div class="card">
+        <div class="tbl">people</div>
+        <h4>Contact cards</h4>
+        <ul>
+          <li><code>canonicalName</code> · "Karan Mohla"</li>
+          <li><code>handles</code> · every email address and nickname that means this person</li>
+          <li><code>role</code>, <code>org</code> · "Partner, Sequoia India"</li>
+          <li><code>firstSeenAt</code> / <code>lastSeenAt</code> · when he first and last showed up</li>
+          <li><code>mergedIntoId</code> · two cards turn out to be one person? point one at the other — don't delete</li>
+        </ul>
+        <div class="why">Right now "Karan" is just text inside email rows. After this he's a real card that notes, briefs and lookups can all point at.</div>
+      </div>
+      <div class="card">
+        <div class="tbl">observations</div>
+        <h4>Ayumi's notebook — one note per row</h4>
+        <ul>
+          <li><code>body</code> · the note itself, in plain words: "Karan usually runs 10 minutes late"</li>
+          <li><code>about</code> · who or what it concerns. <em>A note about two people IS the connection between them</em></li>
+          <li><code>kind</code> · fact / preference / pattern / relationship / state</li>
+          <li><code>confidence</code> + <code>source</code> · saw it happen, was told, or guessed</li>
+          <li><code>receipts</code> · the actual emails and events that back it up</li>
+          <li><code>firstSeenAt</code> / <code>lastSeenAt</code> / <code>weight</code> · how often life keeps confirming it</li>
+          <li><code>invalidatedAt</code> · the date it stopped being true</li>
+          <li><code>supersededById</code> · points at the newer note that replaced it</li>
+          <li><code>struckAt</code> · you crossed it out — forget it</li>
+        </ul>
+        <div class="why">Old notes are never deleted, only end-dated. That avoids ChatGPT's famous bug where a cancelled trip keeps coming back forever. And every note can prove itself — that's the receipts.</div>
+      </div>
+      <div class="card">
+        <div class="tbl">digests</div>
+        <h4>Ayumi's cheat sheet — one page per user</h4>
+        <ul>
+          <li><code>body</code> · short markdown, about half a page</li>
+          <li>sections: people · habits · preferences · what's going on right now</li>
+          <li>every line shows how many receipts back it · "Karan runs late, as a rule (×4)"</li>
+          <li>rewritten every night from the strongest notes</li>
+          <li>pasted into every single thing Ayumi writes</li>
+        </ul>
+        <div class="why">Same trick ChatGPT and Gemini use: don't search memory — keep one short summary and always have it in hand.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════ RUNTIME FLOWCHART ═══════════════ -->
+  <section>
+    <h2>2 · How it works, start to finish <span class="h2-note">solid boxes already work · dashed red boxes are this build</span></h2>
+    <div class="flow">
+
+      <!-- sources row -->
+      <div class="flow-row-full">
+        <div class="node">
+          <div class="node-head"><span class="node-title">Overnight, the world arrives</span><span class="chip shipped">shipped</span></div>
+          <div class="node-desc">Emails, calendar changes, doc edits, voice notes — each saved as a row in <em>signals</em>. Duplicates are caught by an id check. This all works today.</div>
+          <div class="node-files"><b>tables</b> signals, connectorState, connectorAccounts</div>
+        </div>
+        <div class="arrow"><span class="lbl">6:00 — the worker starts the morning job (daily_scan)</span>▼</div>
+      </div>
+
+      <!-- two lanes -->
+      <div class="lanes">
+        <!-- WRITE PATH -->
+        <div>
+          <div class="lane-title write">■ Write path — Ayumi takes notes</div>
+
+          <div class="node">
+            <div class="node-head"><span class="node-id">W1</span><span class="node-title">Morning work finishes</span><span class="chip shipped">shipped</span></div>
+            <div class="node-desc">Ayumi finishes the 6am run: briefs prepared, memo written, Today thread posted. Everything Ayumi just read and wrote is the raw material for learning.</div>
+            <div class="node-files"><b>files</b> worker/src/processors/event.ts · worker/src/agent/loop.ts</div>
+          </div>
+          <div class="arrow"><span class="lbl">then a new job runs: memory_consolidate (once per day)</span>▼</div>
+
+          <div class="node new">
+            <div class="node-head"><span class="node-id">W2</span><span class="node-title">Ayumi drafts new notes</span><span class="chip done">done</span></div>
+            <div class="node-desc">A small AI pass reads what the morning touched — the emails, the meetings, what Ayumi wrote — and drafts candidate notes: what was learned, about whom, with which emails as receipts. There is <em>no fixed list of allowed note types</em>. "He goes quiet before big asks" is a perfectly good note.</div>
+            <div class="node-files"><b>new</b> worker/src/memory/extract.ts</div>
+          </div>
+          <div class="arrow">▼</div>
+
+          <div class="node new">
+            <div class="node-head"><span class="node-id">W3</span><span class="node-title">Ayumi compares drafts with what's already known</span><span class="chip done">done</span></div>
+            <div class="node-desc">Each draft is held against the existing notes about the same people. Four outcomes: <em>ADD</em> — it's new, keep it. <em>REINFORCE</em> — Ayumi already knew this; the old note just gets stronger. <em>SUPERSEDE</em> — it contradicts an old note; write the new one, end-date the old one (never delete). <em>DROP</em> — noise, ignore. If this job crashes and reruns, it cleans up after itself first — the same trick the briefs already use.</div>
+            <div class="node-files"><b>new</b> worker/src/memory/consolidate.ts · <b>writes</b> observations, people</div>
+          </div>
+          <div class="arrow">▼</div>
+
+          <div class="node new">
+            <div class="node-head"><span class="node-id">W4</span><span class="node-title">Ayumi rewrites the cheat sheet</span><span class="chip done">done</span></div>
+            <div class="node-desc">The strongest living notes get boiled down into the one-page summary, grouped by person. All of this happens at 6am <em>while you sleep</em> — some companies sell this as a feature ("sleep-time compute"); we get it free because the worker already runs at night.</div>
+            <div class="node-files"><b>new</b> worker/src/memory/digest.ts · <b>writes</b> digests (one row per user)</div>
+          </div>
+        </div>
+
+        <!-- READ PATH -->
+        <div>
+          <div class="lane-title read">■ Read path — using what Ayumi knows</div>
+
+          <div class="node">
+            <div class="node-head"><span class="node-id">R1</span><span class="node-title">Something names the moment</span><span class="chip shipped">shipped</span></div>
+            <div class="node-desc">The calendar says "Karan, 14:30". An email thread heats up. You ask Ayumi a question. <em>The trigger always tells us who the moment is about</em> — so we can fetch the notes before the thinking starts, never during.</div>
+            <div class="node-files"><b>files</b> worker/src/processors/event.ts (prepareDailyScan, ai_ask)</div>
+          </div>
+          <div class="arrow"><span class="lbl">a couple of database reads · ~2 milliseconds · you never feel it</span>▼</div>
+
+          <div class="node new">
+            <div class="node-head"><span class="node-id">R2</span><span class="node-title">The desk gets set</span><span class="chip done">done</span></div>
+            <div class="node-desc">Before the AI call starts, plain database reads fetch: the cheat sheet (always), plus the top 20 living notes about each person involved today. Crossed-out and end-dated notes stay out.</div>
+            <div class="node-files"><b>edit</b> prepareDailyScan + ai_ask context builders · <b>reads</b> digests, observations, people</div>
+          </div>
+          <div class="arrow">▼</div>
+
+          <div class="node">
+            <div class="node-head"><span class="node-id">R3</span><span class="node-title">One AI call writes the morning</span><span class="chip shipped">shipped</span></div>
+            <div class="node-desc">The agent runs exactly as it does today — except now "plan for 20 real minutes, not 30" comes straight from a note, with its receipt. For the rare thing nobody pre-fetched, Ayumi gets one new tool, <em>memory_lookup</em>, to check the notebook mid-thought.</div>
+            <div class="node-files"><b>files</b> worker/src/agent/loop.ts · system-prompt.md · <b>new tool</b> memory_lookup in worker/src/tools/index.ts</div>
+          </div>
+          <div class="arrow">▼</div>
+
+          <div class="node">
+            <div class="node-head"><span class="node-id">R4</span><span class="node-title">The Today page shows it</span><span class="chip shipped">shipped</span></div>
+            <div class="node-desc">The morning thread lands in the app: Ayumi's verdict, the memo you can redline, the brief cards. This screen already works end to end — <em>we are not changing the pipe, we are changing what Ayumi knows at the moment of writing</em>.</div>
+            <div class="node-files"><b>tables</b> turns, briefs, proposals · <b>iOS</b> Today screen (no changes in v1)</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- feedback loop -->
+      <div class="flow-row-full" style="margin-top: 28px;">
+        <div class="arrow loop"><span class="lbl">the loop closes — your red pen teaches Ayumi</span>↺</div>
+        <div class="node feedback">
+          <div class="node-head"><span class="node-id">F1</span><span class="node-title">Strike to unlearn</span><span class="chip done">done</span></div>
+          <div class="node-desc">Each memo line will remember which notes it was based on. When you strike a line, those notes get marked struck — out of the cheat sheet and out of the desk-setting from the next night on. Today a strike only means "stop showing me this." After this build it means <em>"forget this."</em> ChatGPT hides memory editing deep in settings; for us it's the same red pen you already use every morning.</div>
+          <div class="node-files"><b>edit</b> turns.memo line shape · strike API route · the cheat-sheet rebuild excludes struck notes</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════ BUILD PHASES ═══════════════ -->
+  <section>
+    <h2>3 · Build phases <span class="h2-note">we flip the chips as we go — this is the living tracker</span></h2>
+
+    <!-- BUILD ORDER — the slices -->
+    <div class="phase" style="border-color: var(--green);">
+      <div class="phase-head" style="background: #4a7c590d;"><span class="phase-num" style="color: var(--green);">BUILD ORDER</span><span class="phase-title">Little by little — four slices, each ends with something you can see</span></div>
+      <div class="phase-body">
+        <div class="step">
+          <span class="step-id">A</span>
+          <span class="step-what">Bones <span class="detail">Phase 0 + Phase 1. The three tables exist, and the emails already in the database become contact cards.</span>
+            <span class="accept">you see Karan's card — one row, both his email addresses on it.</span>
+          </span>
+          <span class="step-status"><span class="chip done">done</span></span>
+        </div>
+        <div class="step">
+          <span class="step-id">B</span>
+          <span class="step-what">Fake notes, real morning <span class="detail">We plant 3 notes about Karan by hand (a small seed script — no AI note-taking yet). Then build the cheat sheet and the desk-setting (Phase 3 + step 4.1) so the morning run actually reads them.</span>
+            <span class="accept">the Today page says something it could never say before — "plan for 20 real minutes, not 30." The idea becomes visible in the app.</span>
+          </span>
+          <span class="step-status"><span class="chip done">done</span></span>
+        </div>
+        <div class="step">
+          <span class="step-id">C</span>
+          <span class="step-what">The notebook writes itself <span class="detail">Phase 2. Delete the planted notes, run a night, and Ayumi's own notes appear — each with receipts.</span>
+            <span class="accept">the notebook fills itself; run it twice, no duplicates.</span>
+          </span>
+          <span class="step-status"><span class="chip done">done</span></span>
+        </div>
+        <div class="step">
+          <span class="step-id">P</span>
+          <span class="step-what">The prediction loop <span class="detail">Memory v2 (see "The Theory of You" page). Nightly falsifiable bets with numeric confidence and basedOn pointers; strict resolution against arriving signals; outcomes reinforce or weaken the notes that made them; calibration line rides every prompt.</span>
+            <span class="accept">a bet settles → its backing notes' weight moves → the track-record line updates. Proven in the rehearsal.</span>
+          </span>
+          <span class="step-status"><span class="chip done">done</span></span>
+        </div>
+        <div class="step">
+          <span class="step-id">D</span>
+          <span class="step-what">The red pen + the rehearsal <span class="detail">Phase 5 + Phase 6. Strike means forget, then the full three-week Karan rehearsal proves the whole loop.</span>
+            <span class="accept">strike an insight → gone next morning; all rehearsal checks pass.</span>
+          </span>
+          <span class="step-status"><span class="chip done">done</span></span>
+        </div>
+        <div class="step" style="border-top: 1.5px solid var(--line);">
+          <span class="step-id">why</span>
+          <span class="step-what"><span class="detail" style="margin-top: 0;">Reading comes before writing on purpose: planted notes let the Today page show the magic in days, before the harder AI note-taking work starts. If the reading side doesn't feel good, we find out before spending on the writing side.</span></span>
+          <span class="step-status"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- PHASE 0 -->
+    <div class="phase">
+      <div class="phase-head"><span class="phase-num">PHASE 0</span><span class="phase-title">The three new tables</span><span class="chip done">done</span></div>
+      <div class="phase-body">
+        <div class="step">
+          <span class="step-id">0.1</span>
+          <span class="step-what"><code>people</code> table in <span class="path">src/db/schema.ts</span>
+            <span class="detail">id · userId · canonicalName · handles (emails + nicknames) · role · org · firstSeenAt · lastSeenAt · mergedIntoId · the usual timestamps and soft delete.</span>
+          </span>
+          <span class="step-status"><span class="chip done">done</span></span>
+        </div>
+        <div class="step">
+          <span class="step-id">0.2</span>
+          <span class="step-what"><code>observations</code> table + a small side table <code>observationAbout</code>
+            <span class="detail">All the note columns from section 1. The side table is just (note id ↔ person handle) pairs, so "all notes about Karan" is a fast indexed query instead of scanning text. Still a plain table — data, not machinery.</span>
+          </span>
+          <span class="step-status"><span class="chip done">done</span></span>
+        </div>
+        <div class="step">
+          <span class="step-id">0.3</span>
+          <span class="step-what"><code>digests</code> table
+            <span class="detail">One row per user, overwritten in place: the cheat sheet text, which notes built it, and when.</span>
+          </span>
+          <span class="step-status"><span class="chip done">done</span></span>
+        </div>
+        <div class="step">
+          <span class="step-id">0.4</span>
+          <span class="step-what">Migration 0012 + one new job type
+            <span class="detail">Add "memory_consolidate" to the worker's job list. Generate the migration with drizzle.</span>
+            <span class="accept">migration runs clean on a copy of the real database; app and worker boot; nothing that exists today breaks.</span>
+          </span>
+          <span class="step-status"><span class="chip done">done</span></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- PHASE 1 -->
+    <div class="phase">
+      <div class="phase-head"><span class="phase-num">PHASE 1</span><span class="phase-title">People — turn email headers into contact cards</span><span class="chip done">done</span></div>
+      <div class="phase-body">
+        <div class="step">
+          <span class="step-id">1.1</span>
+          <span class="step-what">Matcher <span class="path">worker/src/memory/people.ts</span>
+            <span class="detail">If the email address matches an existing card, use it. New address → new card. Bare name with no email → temporary card. Kept deliberately dumb: wrongly merging two Rahuls would make Ayumi confidently wrong about a person — the worst possible failure. Anything ambiguous becomes a suggestion for you to approve, never an automatic merge.</span>
+          </span>
+          <span class="step-status"><span class="chip done">done</span></span>
+        </div>
+        <div class="step">
+          <span class="step-id">1.2</span>
+          <span class="step-what">Backfill <span class="path">scripts/backfill-people.ts</span>
+            <span class="detail">One pass over the emails and calendar events already in the database — sender, recipients, attendees, doc authors — so the cards start populated.</span>
+          </span>
+          <span class="step-status"><span class="chip done">done</span></span>
+        </div>
+        <div class="step">
+          <span class="step-id">1.3</span>
+          <span class="step-what">Upgrade the <code>person_lookup</code> tool
+            <span class="detail">Same tool name, so the prompts don't change. It now returns the contact card and Ayumi's notes first, then the raw email/journal mentions like before.</span>
+            <span class="accept">Karan exists exactly once, with both his email addresses on one card.</span>
+          </span>
+          <span class="step-status"><span class="chip done">done</span></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- PHASE 2 -->
+    <div class="phase">
+      <div class="phase-head"><span class="phase-num">PHASE 2</span><span class="phase-title">Write path — Ayumi starts taking notes (W2 · W3)</span><span class="chip done">done</span></div>
+      <div class="phase-body">
+        <div class="step">
+          <span class="step-id">2.1</span>
+          <span class="step-what">Drafting notes <span class="path">worker/src/memory/extract.ts</span>
+            <span class="detail">One AI call per morning run. Input: what the run read and wrote. Output: draft notes as JSON — the note text, who it's about, and the receipt ids. A draft without receipts is thrown away, on principle.</span>
+          </span>
+          <span class="step-status"><span class="chip done">done</span></span>
+        </div>
+        <div class="step">
+          <span class="step-id">2.2</span>
+          <span class="step-what">Keeping the notebook clean <span class="path">worker/src/memory/consolidate.ts</span>
+            <span class="detail">The ADD / REINFORCE / SUPERSEDE / DROP step from the flowchart, saved to the database in one transaction. Replacing a note never deletes the old one — it gets an end date and a pointer to its replacement.</span>
+          </span>
+          <span class="step-status"><span class="chip done">done</span></span>
+        </div>
+        <div class="step">
+          <span class="step-id">2.3</span>
+          <span class="step-what">Wire it into the worker <span class="path">worker/src/processors/event.ts</span>
+            <span class="detail">When the morning run finishes, queue one memory_consolidate job (max one per day). If it crashes mid-way and reruns, it deletes its own half-finished work first — same recovery trick the briefs use.</span>
+            <span class="accept">run the morning job on demo data → notes appear, each pointing at real emails; run it again → zero duplicates.</span>
+          </span>
+          <span class="step-status"><span class="chip done">done</span></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- PHASE 3 -->
+    <div class="phase">
+      <div class="phase-head"><span class="phase-num">PHASE 3</span><span class="phase-title">The cheat sheet (W4)</span><span class="chip done">done</span></div>
+      <div class="phase-body">
+        <div class="step">
+          <span class="step-id">3.1</span>
+          <span class="step-what">Builder <span class="path">worker/src/memory/digest.ts</span>
+            <span class="detail">Pick the strongest living notes (often-confirmed and recent first), group by person, write the one-pager. Runs at the end of every nightly memory job.</span>
+          </span>
+          <span class="step-status"><span class="chip done">done</span></span>
+        </div>
+        <div class="step">
+          <span class="step-id">3.2</span>
+          <span class="step-what">Put it in front of Ayumi, always
+            <span class="detail">The morning run and the Q&amp;A flow both start with the cheat sheet in the prompt. Keep an eye on the token bill — it should add well under a thousand tokens per run.</span>
+            <span class="accept">you can see the cheat sheet inside the prompt, and the daily token spend barely moves.</span>
+          </span>
+          <span class="step-status"><span class="chip done">done</span></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- PHASE 4 -->
+    <div class="phase">
+      <div class="phase-head"><span class="phase-num">PHASE 4</span><span class="phase-title">Read path — set the desk (R2 · R3)</span><span class="chip done">done</span></div>
+      <div class="phase-body">
+        <div class="step">
+          <span class="step-id">4.1</span>
+          <span class="step-what">Pre-fetch in the morning run
+            <span class="detail">Whoever shows up in today's calendar and overnight email → the top 20 living notes about each of them go into the prompt, receipts included, so Ayumi can quote them.</span>
+          </span>
+          <span class="step-status"><span class="chip done">done</span></span>
+        </div>
+        <div class="step">
+          <span class="step-id">4.2</span>
+          <span class="step-what">New tool <code>memory_lookup</code> in <span class="path">worker/src/tools/index.ts</span>
+            <span class="detail">For mid-thought digs nobody predicted. Ask by name or free text; get living notes with receipts. End-dated notes only come back when Ayumi asks for history — "that was true until April."</span>
+          </span>
+          <span class="step-status"><span class="chip done">done</span></span>
+        </div>
+        <div class="step">
+          <span class="step-id">4.3</span>
+          <span class="step-what">Same desk-setting for direct questions
+            <span class="detail">When you ask Ayumi something, names in your question get matched to cards, and their notes come along before the answer.</span>
+            <span class="accept">on a morning with a Karan meeting, the prompt visibly contains Karan notes, and the memo actually uses one (we check the work trace by eye).</span>
+          </span>
+          <span class="step-status"><span class="chip done">done</span></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- PHASE 5 -->
+    <div class="phase">
+      <div class="phase-head"><span class="phase-num">PHASE 5</span><span class="phase-title">The red pen — strike means forget (F1)</span><span class="chip done">done</span></div>
+      <div class="phase-body">
+        <div class="step">
+          <span class="step-id">5.1</span>
+          <span class="step-what">Memo lines remember their sources
+            <span class="detail">Each memo line gets an extra field: which notes it was based on. Old memos without the field keep working untouched.</span>
+          </span>
+          <span class="step-status"><span class="chip done">done</span></span>
+        </div>
+        <div class="step">
+          <span class="step-id">5.2</span>
+          <span class="step-what">Striking a line marks its notes struck
+            <span class="detail">The existing strike endpoint gets one extra job: mark the notes behind that line as struck. The cheat sheet and the desk-setting already skip struck notes, so nothing else changes.</span>
+            <span class="accept">strike a Karan line in the app → that note is marked struck → next morning's cheat sheet no longer has it. The strike gesture in iOS doesn't change at all.</span>
+          </span>
+          <span class="step-status"><span class="chip done">done</span></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- PHASE 6 -->
+    <div class="phase">
+      <div class="phase-head"><span class="phase-num">PHASE 6</span><span class="phase-title">The Karan rehearsal — prove it end to end</span><span class="chip done">done</span></div>
+      <div class="phase-body">
+        <div class="step">
+          <span class="step-id">6.1</span>
+          <span class="step-what">Seed a fake month <span class="path">scripts/seed-memory-rehearsal.ts</span>
+            <span class="detail">Three weeks of made-up Karan emails and meetings with planted habits: ran late 4 times, pushed on retention in 3 emails, went silent after the deck. Plus one red herring that should NOT become a note.</span>
+          </span>
+          <span class="step-status"><span class="chip done">done</span></span>
+        </div>
+        <div class="step">
+          <span class="step-id">6.2</span>
+          <span class="step-what">Run three nights
+            <span class="detail">The notes settle down instead of duplicating. The cheat sheet reads like something a sharp assistant would actually keep. The morning thread says something like "plan for 20 real minutes" — and the receipts are right there in the work trace.</span>
+          </span>
+          <span class="step-status"><span class="chip done">done</span></span>
+        </div>
+        <div class="step">
+          <span class="step-id">6.3</span>
+          <span class="step-what">Strike one insight → gone next morning
+            <span class="detail">That's the full loop proven. Then: flip the chips on this page, update the notes, commit.</span>
+            <span class="accept">all three rehearsal checks pass on the simulator build.</span>
+          </span>
+          <span class="step-status"><span class="chip done">done</span></span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════ DECISIONS ═══════════════ -->
+  <section>
+    <h2>4 · Decisions we made <span class="h2-note">written down so we never argue them twice</span></h2>
+    <table class="plain">
+      <tr><th>Decision</th><th>Why</th></tr>
+      <tr><td>Plain table, no graph engine</td><td>A graph engine means weeks spent on "is this Karan the same Karan?" and forcing every note into fixed categories. The notes don't fit fixed categories — that was the founding rule. We revisit only when a feature needs a question Ayumi can't answer by reading the notes.</td></tr>
+      <tr><td>No AI search index in v1</td><td>ChatGPT and Gemini ship memory with no search index at all — one short summary in the prompt won the argument industry-wide. We add search only if we catch Ayumi missing notes that should have been found.</td></tr>
+      <tr><td>Cheat sheet is always on</td><td>Gemini only uses its memory when you say "personalize this." A chief of staff who waits to be asked isn't one.</td></tr>
+      <tr><td>Every note must have receipts</td><td>Most products can't tell you why the AI believes something. Ours can, note by note. The red pen also needs receipts to know exactly what to strike.</td></tr>
+      <tr><td>End-date, never delete</td><td>Deleting loses the story and invites ChatGPT's cancelled-trip-keeps-returning bug. An end date keeps history honest: "that was true until April."</td></tr>
+      <tr><td>Night work rides the 6am job</td><td>The expensive thinking happens while you sleep, in a job slot that already exists. Zero felt latency.</td></tr>
+      <tr><td>Side table for fast lookups</td><td>"All notes about Karan" must be instant. A two-column helper table keeps it instant — still just data.</td></tr>
+      <tr><td>Person matching stays dumb</td><td>Exact email match only; anything fuzzy becomes a suggestion for you. A wrong merge makes Ayumi confidently wrong about a person — the single worst failure a chief of staff can have.</td></tr>
+    </table>
+    <h3>Saved for later — with the exact moment to revisit</h3>
+    <table class="plain">
+      <tr><th>Item</th><th>Revisit when…</th></tr>
+      <tr><td>Graph engine</td><td>a feature needs chained connection questions — "who links this investor to that company?" — over more notes than Ayumi can read in one sitting.</td></tr>
+      <tr><td>AI search index (sqlite-vec)</td><td>the rehearsal or real use shows Ayumi missing notes that plain lookup should have found.</td></tr>
+      <tr><td>"What Ayumi knows" screen</td><td>after the layer is real — a place in the app to read Ayumi's notes and strike them directly.</td></tr>
+      <tr><td>Ayumi's voice adapting to you</td><td>after notes accumulate — "prefers blunt mornings" is just a note about you, feeding Ayumi's tone.</td></tr>
+    </table>
+  </section>
+
+  <!-- ═══════════════ CHANGELOG ═══════════════ -->
+  <section>
+    <h2>5 · Changelog <span class="h2-note">newest first — updated every working session</span></h2>
+    <ul class="changelog">
+      <li><span class="d">2026-06-07</span>Review is now one bare page — the draft idiom everywhere: no tabs, no card chrome, Ayumi framing line + morning prose + held-for-you sentences directly on the paper. The seal got an engagement guard (≥2.5s held or a strike) so page transitions can never file an unread letter.</li>
+      <li><span class="d">2026-06-07</span>Cards eliminated: Review is now ONE letter. The overnight queue renders as sentences in the brief ("Held for you — strike to decline; the rest file themselves"); no card stack, no count row, no APPROVE ALL, no Keep button. The review ends when the letter is put down: leaving the page or backgrounding the app seals it — strikes commit as dismissals, untouched proposals approve themselves (silence is consent), and the letter collapses to its KEPT stamp for the day.</li>
+      <li><span class="d">2026-06-07</span>The finer pen: the morning memo now renders as ONE flowing brief (no bullet rows) and the red pen works at WORD granularity — drag sideways to strike a span (snaps to whole words, haptic tick per word, drag over struck ink to erase), tap a word to fine-tune. Partial strikes are a PUT (<code>struckWords</code> on the line — recorded, no destructive effects); only a fully-struck thought fires forget/dismiss. New <code>MemoRedline.swift</code> gesture engine; <code>turn.strike</code> accepts word spans; iOS gesture untouched conceptually — same red pen, finer nib.</li>
+      <li><span class="d">2026-06-06</span>Slices C, P and D built and rehearsed in one evening session. Phase 2 (extract/consolidate, two cheap one-shot calls a night, all writes in ONE commit txn), Phase 4 completed (<code>memory_lookup</code> tool + names-in-question desk for ai_ask), Phase 5 (memo lines carry <code>note_ids</code>; strike marks backing notes struck via the existing endpoint), Memory v2 Phase P (predict/resolve/score/correct — see "The Theory of You" page), and the Phase 6 Karan rehearsal: 4 self-written notes with receipts · zero duplicates on re-run · the charger red herring never became a note · Bangalore→Mumbai SUPERSEDE fired with successor pointer · 4 falsifiable bets made, 1 settled with credit assignment · calibration line went live ("running OVERCONFIDENT") · strike → note gone from the next cheat sheet. Schema rev 0013.</li>
+      <li><span class="d">2026-06-06</span>Slice B proven live: 3 planted Karan notes (<code>scripts/seed-memory-notes.ts</code>), the cheat sheet (<code>worker/src/memory/digest.ts</code>, deterministic — no AI call) and the desk-setting (<code>desk.ts</code> + prepareDailyScan/ai_ask wiring). A real morning run wrote: <em>"Karan at 14:30 is prepared — cohort curve first, twenty real minutes, not thirty"</em> — both planted notes used, and the work trace shows Ayumi calling <code>person_lookup</code> on the notebook mid-thought. Memory blocks add ~600 tokens/run (budget: well under 1k). Two robustness fixes en route: parseFinal salvages JSON wrapped in prose; persist skips malformed proposal payloads instead of failing the whole paid run.</li>
+      <li><span class="d">2026-06-06</span>Phase 1 built — slice A (Bones) complete: the matcher <code>worker/src/memory/people.ts</code> (exact-email only; bare names get temp cards; anything fuzzy prints a merge suggestion, approved via <code>backfill-people.ts --merge</code>), the backfill <code>scripts/backfill-people.ts</code> (idempotent — second run creates 0; 20 newsletter robots skipped), and <code>person_lookup</code> now leads with the contact card + living notes, raw mentions after. Karan's card exists exactly once; the second-address → suggestion → approved-merge → one-card-both-addresses loop is proven by test.</li>
+      <li><span class="d">2026-06-06</span>Phase 0 built: <code>people</code> / <code>observations</code> + <code>observationAbout</code> / <code>digests</code> tables in schema.ts, migration <code>0012_sticky_captain_stacy</code>, and the <code>memory_consolidate</code> job type (no-op handler until Phase 2). Migration verified on a copy of the real DB; app + worker boot clean.</li>
+      <li><span class="d">2026-06-06</span>Added the build order: four slices, reading before writing — planted notes make the Today page show the idea before the AI note-taking exists.</li>
+      <li><span class="d">2026-06-06</span>Rewrote the whole page in plain English after feedback — too much jargon in the first version.</li>
+      <li><span class="d">2026-06-06</span>Design locked after the research pass (ChatGPT, Gemini, Claude memory teardowns; Letta, Zep/Graphiti, mem0). Phases 0–6 defined, all pending. Build not started.</li>
+    </ul>
+  </section>
+
+  <div class="footnote">Atlas COS · memory build plan · dev-only page, lives in /designs next to the prototypes. Open in any browser. Chips + changelog get updated as phases land.</div>
+</div>
+</body>
+</html>
