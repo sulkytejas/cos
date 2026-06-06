@@ -34,6 +34,7 @@ extension Theme.Palette {
 
     // ── Accents the legacy palette lacks or mis-maps ──
     static let jade = Color(hex: 0x5A8F74)   // --jade (thinking UI dots)
+    static let jadeDeep = Color(hex: 0x3F6E57)   // --jade-deep (lock ring confirm, seal on open)
     static let warn = Color(hex: 0xB8431E)   // --ember (low-confidence / warning); note Palette.ember is hijacked to teal
     static let pulseTeal = Color(hex: 0x7AD6C6)  // EO ring / thinking pulse (rgb 122,214,198)
 

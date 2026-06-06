@@ -15,6 +15,9 @@ struct AyumiSettings: View {
     @State private var deviceToken = ""
     @State private var urlRejected = false
     @State private var paired = Keychain.hasDeviceToken
+    /// Opt-in app lock (AtlasApp reads the same key): Face ID with passcode
+    /// fallback covers the app on launch and on returning after the grace window.
+    @AppStorage("requireBiometricLock") private var requireBiometricLock = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -66,6 +69,19 @@ struct AyumiSettings: View {
                 Text("Last synced \(synced.formatted(date: .omitted, time: .shortened))")
                     .font(Theme.Font.mono(10)).foregroundStyle(Theme.Palette.ink3)
             }
+
+            // App lock — rendered like the status rows (mono label left), with
+            // the system toggle tinted to the app's forest accent.
+            HStack {
+                Text("FACE ID").font(Theme.Font.mono(9)).tracking(1.4).foregroundStyle(Theme.Palette.ink3)
+                Spacer()
+                Toggle("", isOn: $requireBiometricLock)
+                    .labelsHidden()
+                    .tint(Theme.Palette.forest)
+            }
+            .padding(.top, 4)
+            Text("Ayumi closes when you step away — only you can open her again.")
+                .font(Theme.Font.sans(12)).foregroundStyle(Theme.Palette.ink3)
 
             // The token budget is enforced + reported by the server gateway
             // (§4.b/§4.e). The old editable on-device cap was advisory and is

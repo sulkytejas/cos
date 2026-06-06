@@ -54,6 +54,8 @@
 	<string>Light</string>
 	<key>NSCalendarsUsageDescription</key>
 	<string>Ayumi reads your calendar to prepare you for what's coming — it never edits or shares your events.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Ayumi uses Face ID so only you can open your life. Your face never leaves this device.</string>
 	<key>NSCalendarsFullAccessUsageDescription</key>
 	<string>Ayumi reads your calendar to prepare you for what's coming — it never edits or shares your events.</string>
 </dict>
