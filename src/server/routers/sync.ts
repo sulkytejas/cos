@@ -13,6 +13,7 @@ import {
   watchers,
   signals,
   proposals,
+  turns,
 } from "@/db/schema";
 
 /**
@@ -74,6 +75,7 @@ const ID_TABLES = {
   watchers,
   signals,
   proposals,
+  turns,
 } as const;
 
 type IdTableName = keyof typeof ID_TABLES;

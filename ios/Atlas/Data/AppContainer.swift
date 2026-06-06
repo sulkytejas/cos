@@ -15,6 +15,8 @@ enum AppContainer {
         Proposal.self,
         Signal.self,
         AppEvent.self,
+        // Today agentic flow v1 — the conversational thread (mirrors `turns`).
+        Turn.self,
         // v0.6 Phase 4 — delta-sync bookkeeping (SERVER_ARCHITECTURE.md §4.d/§4.e):
         // durable per-table cursor, write-through outbox queue, one-way
         // bootstrap latch. Kept in the SAME store as the mirror.

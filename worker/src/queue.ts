@@ -301,6 +301,7 @@ const priorBriefIdsStmt = raw.prepare(
 );
 const deleteBriefsStmt = raw.prepare(`DELETE FROM briefs WHERE generated_by_event_id = @id`);
 const deleteProposalsStmt = raw.prepare(`DELETE FROM proposals WHERE generated_by_event_id = @id`);
+const deleteTurnsStmt = raw.prepare(`DELETE FROM turns WHERE generated_by_event_id = @id`);
 const deleteTodosBySourceBrief = raw.prepare(`DELETE FROM todos WHERE source_brief_id = @briefId`);
 const deleteDecisionsBySourceBrief = raw.prepare(`DELETE FROM decisions WHERE source_brief_id = @briefId`);
 const deleteEntriesBySourceBrief = raw.prepare(`DELETE FROM entries WHERE source_brief_id = @briefId`);
@@ -316,6 +317,11 @@ function deletePriorOutput(eventId: string): void {
   // Proposals next — they FK-reference briefs (onDelete: set null), but
   // deleting them first keeps the intent obvious.
   deleteProposalsStmt.run({ id: eventId });
+  // The morning turn this scan composed (keyed like briefs/proposals on the
+  // generating event) — so a requeued daily_scan never doubles the thread's
+  // "while you slept" turn. Deleted before the briefs it embeds for the same
+  // intent-clarity reason as proposals above.
+  deleteTurnsStmt.run({ id: eventId });
   deleteBriefsStmt.run({ id: eventId });
 }
 

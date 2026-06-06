@@ -4,6 +4,7 @@
  * if invalid.
  */
 import { randomUUID } from "node:crypto";
+import { eq } from "drizzle-orm";
 import { db, schema } from "./db";
 import { BOOTSTRAP_USER_ID } from "../../src/db/schema";
 import type { AgentResult, AgentTraceEntry, BriefOutput } from "./agent/loop";
@@ -13,6 +14,8 @@ export interface PersistedBrief {
   briefId: string | null;
   proposalIds: string[];
   watcherIds: string[];
+  /** The morning turn this run composed, if any (daily scans only). */
+  turnId: string | null;
 }
 
 /** Confidence threshold above which a proposal is filed immediately. */
@@ -30,11 +33,15 @@ export function persistAgentResult(
     chapterId?: string | null;
     generatedByEventId?: string | null;
     userId?: string;
+    /** Set on a daily scan — composes the morning turn from `brief.day_memo`. */
+    turnKind?: "morning";
+    /** The overnight window the morning turn covers ("while you slept" divider). */
+    window?: { start: string; end: string } | null;
   } = {}
 ): PersistedBrief {
   const userId = opts.userId ?? BOOTSTRAP_USER_ID;
   if (!result.brief) {
-    return { briefId: null, proposalIds: [], watcherIds: [] };
+    return { briefId: null, proposalIds: [], watcherIds: [], turnId: null };
   }
   const o = result.brief;
 
@@ -142,7 +149,108 @@ export function persistAgentResult(
     watcherIds.push(wid);
   }
 
-  return { briefId, proposalIds, watcherIds };
+  // 5) The morning turn (Today agentic flow v1). Compose ONE `turns` row from the
+  // agent's `day_memo` — but only on a daily scan (opts.turnKind). The `body` is
+  // the verdict shown on Today; the `memo` lines are redlineable in Review. Each
+  // line resolves its refId from THIS run's outputs: a `brief:true` line points at
+  // the brief just written; a `proposal_index` line points at the proposal at that
+  // index in `proposalIds` (the order matches `o.proposals`). A line with neither
+  // ref is a plain disposition (refKind/refId null).
+  let turnId: string | null = null;
+  if (o.day_memo && opts.turnKind) {
+    turnId = randomUUID();
+    const dm = o.day_memo;
+    // Validate the connector suggestion against the sources iOS can actually grant
+    // (the three Google scopes the OAuth machinery covers). A SUPPORTED source
+    // rides on the turn as a tappable CONNECT CTA. An UNSUPPORTED one (anything
+    // else she names — whatsapp, a bank) is NOT a user CTA: iOS can't grant it,
+    // so rendering it as a button would dead-end. Instead it's a dev SIGNAL — a
+    // real observed gap the builders should know about — so we null it on the turn
+    // and log it to the wishlist (dev_unknown_components), the same ledger the
+    // chapter `missing_modules` use, tagged source:'connector' so `pnpm wishlist`
+    // counts it among the deliberate agent wishes.
+    const SUPPORTED_CONNECTOR_SOURCES = ["gmail", "calendar", "drive"] as const;
+    const suggested = dm.connector;
+    const isSupported =
+      !!suggested &&
+      (SUPPORTED_CONNECTOR_SOURCES as readonly string[]).includes(suggested.source);
+    if (suggested && !isSupported) {
+      db.insert(schema.devUnknownComponents)
+        .values({
+          id: randomUUID(),
+          briefId: null,
+          componentName: "connector:" + suggested.source,
+          rawProps: { spec: suggested.copy, source: "connector" },
+        })
+        .run();
+    }
+    db.insert(schema.turns)
+      .values({
+        id: turnId,
+        userId,
+        role: "ayumi",
+        kind: opts.turnKind,
+        body: dm.verdict,
+        sourceTag: dm.source_tag ?? null,
+        briefIds: briefId ? [briefId] : null,
+        memo: {
+          lines: dm.lines.map((l) => ({
+            id: randomUUID(),
+            text: l.text,
+            refKind: l.brief ? "brief" : l.proposal_index != null ? "proposal" : null,
+            refId: l.brief
+              ? briefId
+              : l.proposal_index != null
+                ? (proposalIds[l.proposal_index] ?? null)
+                : null,
+            struck: false,
+          })),
+          status: "draft",
+          keptAt: null,
+          keptBy: null,
+        },
+        // Only supported sources become a turn-level CONNECT CTA; unsupported
+        // ones were diverted to the wishlist above and are null here.
+        connector: isSupported
+          ? {
+              source: suggested!.source as "gmail" | "calendar" | "drive",
+              copy: suggested!.copy,
+            }
+          : null,
+        meta: opts.window
+          ? { windowStart: opts.window.start, windowEnd: opts.window.end }
+          : null,
+        generatedByEventId: opts.generatedByEventId ?? null,
+        updatedAt: now,
+      })
+      .run();
+  }
+
+  // 6) Chapter palette + dev wishlist (Today agentic flow v1). On a chapter touch
+  // (opts.chapterId) the agent may advise a `palette` (vocabulary of component
+  // kinds this chapter's life will need) and name `missing_modules` it wished
+  // existed — the palette updates the chapter, the missing modules log to the dev
+  // wishlist (dev_unknown_components) so we know what to build next.
+  if ((o.palette || o.missing_modules) && opts.chapterId) {
+    if (o.palette) {
+      db.update(schema.chapters)
+        .set({ palette: o.palette, updatedAt: now })
+        .where(eq(schema.chapters.id, opts.chapterId))
+        .run();
+    }
+    for (const m of o.missing_modules ?? []) {
+      db.insert(schema.devUnknownComponents)
+        .values({
+          id: randomUUID(),
+          briefId: null,
+          componentName: m.name,
+          rawProps: { spec: m.spec, chapterId: opts.chapterId, source: "palette" },
+        })
+        .run();
+    }
+  }
+
+  return { briefId, proposalIds, watcherIds, turnId };
 }
 
 /** Same canonical-write logic as the proposal router. Kept duplicated rather than

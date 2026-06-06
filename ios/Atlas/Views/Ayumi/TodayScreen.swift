@@ -1,12 +1,47 @@
 import SwiftUI
+import SwiftData
 
 /// Today — the conversational home. One scrolling thread between the user and
 /// Ayumi (italic-serif voice, roman user bubbles), with embedded brief/action
 /// capsules that morph into letters, and a fixed compose bar.
+///
+/// v1 (Today agentic flow): the thread is no longer a hardcoded script — it is
+/// the live `turns` table, mirrored from the server's nightly daily-scan. The
+/// VERDICT (a morning turn's `body`) is what shows here; the full redlineable
+/// MEMO lives in Review. Every visual primitive below (AyumiTurn / UserTurn /
+/// ThinkingLine / BriefCapsule / DayDivider geometry, the EOLayer, the
+/// `--today-bottom` debug hook, the 70px conv inset) is unchanged — only the
+/// DATA SOURCE moved from literals to `@Query`, plus the new review chip and
+/// connector line that the morning turn can carry.
 struct TodayScreen: View {
     @Environment(HaloController.self) private var halo
     @Environment(NavRouter.self) private var router
+    /// The single SwiftData writer / API pass-through — the CONNECT sheet reads a
+    /// source's `connectorStatus` and mints its `connectorAuthURL` through this.
+    @Environment(AtlasRepo.self) private var repo
     @State private var rings: [EORingItem] = []
+
+    /// The morning turn's connector line presents an in-place CONNECT SHEET — the
+    /// SAME generic sheet for any supported source (gmail | calendar | drive).
+    /// Tapping no longer routes anywhere; the sheet runs the real Google OAuth
+    /// round-trip when the server is configured, or the app-wide demo grant when
+    /// it isn't. `connectSheetSource` holds the source being connected (drives the
+    /// `.sheet` presentation); `fedSources` records which sources have flipped to
+    /// FEEDING so the line's trailing CTA reads "{SOURCE} · FEEDING" thereafter.
+    @State private var connectSheetSource: ConnectSheetItem? = nil
+    @State private var fedSources: Set<String> = []
+
+    /// The whole thread, oldest → newest (the morning turn first, the night's
+    /// exchange below it), mirrored from `turns`.
+    @Query(sort: \Turn.createdAt, order: .forward) private var turns: [Turn]
+    /// Live pending proposals — only their COUNT is read, for the review chip's
+    /// "{n} waiting for you" label (the same `status == "pending"` predicate
+    /// Review filters on).
+    @Query(filter: #Predicate<Proposal> { $0.statusRaw == "pending" })
+    private var pendingProposals: [Proposal]
+    /// All briefs — used to resolve a turn's `briefIds` to a `Brief` for the
+    /// embedded capsule (title + when).
+    @Query private var briefs: [Brief]
 
     private let space = "today.scroll"
 
@@ -20,6 +55,27 @@ struct TodayScreen: View {
         #endif
     }
 
+    /// DEBUG: `--connector-sheet` auto-presents the in-place CONNECT sheet on
+    /// appear (using the morning turn's connector) so the sheet can be shot
+    /// against the design without a tap. Same convention as `--today-bottom`.
+    private var connectorSheetDebug: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains("--connector-sheet")
+        #else
+        false
+        #endif
+    }
+
+    /// The newest morning turn — its overnight `window` drives the "while you
+    /// slept" divider, and it is the turn that may carry the review chip +
+    /// connector line.
+    private var morningTurn: Turn? {
+        turns.last { $0.kind == .morning }
+    }
+
+    /// Live pending count for the review chip ("{n} waiting for you").
+    private var pendingCount: Int { pendingProposals.count }
+
     var body: some View {
         ZStack(alignment: .bottom) {
             ScrollView {
@@ -27,60 +83,25 @@ struct TodayScreen: View {
                     // The "while you slept" divider is the first conv element. Its
                     // clearance from the app-mark comes entirely from the conv's
                     // 70px top inset (set below) + the divider's own 14px top
-                    // margin — matching CSS, no extra top pad here.
-                    DayDivider(label: "while you slept", roman: "02:14 → 06:38")
+                    // margin — matching CSS, no extra top pad here. Its window is
+                    // the newest morning turn's overnight [start, end]; the
+                    // hardcoded "02:14 → 06:38" is the fallback when no morning
+                    // turn (or its window) is present.
+                    DayDivider(label: "while you slept", roman: sleptWindow)
 
-                    // Today is the conversational HOME — its handout is a scripted
-                    // exchange (Ayumi prose + src-tags, the user's reply, Ayumi's
-                    // thinking turn) that the flat `Brief` model cannot reconstruct
-                    // (briefs have no user/thinking turns and carry a "drafted HH:MM"
-                    // line the design never shows). So Today renders the design's
-                    // canonical thread verbatim; live briefs still populate the store
-                    // for the Brief screen, but do not drive this scripted home view.
-                    AyumiTurn(when: "06:38",
-                              paragraphs: [
-                                ayumiProse([
-                                    .init("I worked through the night. A note from "),
-                                    .init("Karan", .roman),
-                                    .init(" landed at "),
-                                    .init("03:42", .roman),
-                                    .init(" — I held it."),
-                                ], size: 17),
-                                ayumiProse([
-                                    .init("Drafted you a brief for "),
-                                    .init("14:30", .accent),
-                                    .init(", opened with the cohort, not the round. The portrait sitting tomorrow shifted one block south — folded under your stack."),
-                                ], size: 17),
-                              ],
-                              source: "6 sources · email, voice memo, calendar, deck v3") {
-                        BriefCapsule(glyph: "K", title: "Karan, in 90 minutes.", when: "14:30",
-                                     onOpen: { emitRing(); halo.setState(.delivered) },
-                                     onOpenFull: { withAnimation(Theme.Motion.overshoot()) { router.go(.brief) } })
+                    if turns.isEmpty {
+                        // Empty state: Ayumi hasn't written the first morning yet
+                        // (no scan has run). One quiet italic line, in the same
+                        // AyumiTurn frame the real morning will occupy.
+                        AyumiTurn(when: "",
+                                  paragraphs: [ayumiProse([.init("Nothing yet — I'll write you after tonight.")], size: 17)])
+                    } else {
+                        ForEach(turns) { turn in
+                            turnView(turn)
+                        }
                     }
 
-                    UserTurn(text: "thanks — anything else I should know before the call?", when: "07:15")
-
-                    AyumiTurn(when: "07:15",
-                              thinking: "reading the deck and yesterday's voice memo…")
-
-                    AyumiTurn(when: "07:16",
-                              paragraphs: [ayumiProse([
-                                .init("Two small things. Your "),
-                                .init("deck v3", .accent),
-                                .init(" still has the old churn slide — I can swap it for the cohort curve in five minutes if you want. And "),
-                                .init("V.", .roman),
-                                .init(" emailed about Thursday with a softer studio time, "),
-                                .init("11:30", .accent),
-                                .init(" instead of "),
-                                .init("11:00", .accent),
-                                .init(" — I haven't accepted yet."),
-                              ], size: 17)],
-                              source: "3 sources · drive, gmail, calendar") {
-                        BriefCapsule(glyph: "S", title: "Swap the churn slide", when: "5 min",
-                                     onOpen: { emitRing(); halo.setState(.delivered) })
-                    }
-
-                    DayDivider(label: "now", roman: "09:41")
+                    DayDivider(label: "now", roman: Self.clock(Date()))
                     Spacer().frame(height: 16)   // CSS .conv padding-bottom 16
                 }
                 .padding(.horizontal, 22)
@@ -115,6 +136,29 @@ struct TodayScreen: View {
             // Ayumi the same way every other screen does: summon in place.
             EOLayer(rings: rings)
         }
+        // The in-place CONNECT sheet — presented by the connector line's tap, the
+        // same generic surface for gmail | calendar | drive. On a granted outcome
+        // it records the source in `fedSources`, flipping the line to FEEDING.
+        .sheet(item: $connectSheetSource) { item in
+            ConnectorSheet(connector: item.connector,
+                           repo: repo,
+                           onGranted: {
+                               withAnimation(Theme.Motion.overshoot()) {
+                                   _ = fedSources.insert(item.connector.source)
+                               }
+                           })
+                .presentationDetents([.medium])
+                .presentationDragIndicator(.visible)
+        }
+        // DEBUG hook: auto-open the CONNECT sheet on appear for screenshotting it
+        // against the design (no tap available without idb). Picks the morning
+        // turn's connector if it carries a grantable one.
+        .task {
+            guard connectorSheetDebug, connectSheetSource == nil,
+                  let connector = morningTurn?.connector,
+                  Self.grantableSources.contains(connector.source) else { return }
+            connectSheetSource = ConnectSheetItem(connector: connector)
+        }
     }
 
     // ─── Capture ──────────────────────────────────────────────────
@@ -129,6 +173,199 @@ struct TodayScreen: View {
             rings.removeAll { $0.id == item.id }
         }
     }
+
+    // ─── Thread rendering (data-driven) ───────────────────────────
+    // The thread is `turns`, oldest→newest. Each turn maps onto exactly one of
+    // the existing visual primitives by role+kind:
+    //   • user                 → UserTurn (roman bubble, right-aligned)
+    //   • ayumi · thinking      → AyumiTurn(thinking:) (the jade-dot reasoning line)
+    //   • ayumi · morning/message → AyumiTurn(paragraphs:source:) with capsule embeds
+    // The morning turn additionally carries the review chip + connector line.
+
+    @ViewBuilder
+    private func turnView(_ turn: Turn) -> some View {
+        switch (turn.role, turn.kind) {
+        case (.user, _):
+            UserTurn(text: turn.body, when: Self.clock(turn.createdAt))
+
+        case (.ayumi, .thinking):
+            // The thinking line lives inside an AyumiTurn (so the avatar/rail +
+            // "Ayumi HH:mm" header come from the shared frame); the jade dot sits
+            // in the prose column, exactly as the prior scripted turn rendered.
+            AyumiTurn(when: Self.clock(turn.createdAt), thinking: turn.body)
+
+        case (.ayumi, _):
+            // Ayumi's verdict (morning) or a plain message. The body is parsed
+            // through the shared Ayumi-markup grammar (paragraphs on "\n\n";
+            // *roman*; ==accent==) and each paragraph becomes one `ayumiProse`
+            // Text at the canonical 17pt prose size.
+            let paragraphs = parseAyumiMarkup(turn.body).map { ayumiProse($0, size: 17) }
+            let isMorning = turn.kind == .morning
+            AyumiTurn(when: Self.clock(turn.createdAt),
+                      paragraphs: paragraphs,
+                      source: turn.sourceTag) {
+                // The capsules this turn references, then — on the morning turn
+                // only — the review chip and (if present) the connector line.
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(turn.briefIds, id: \.self) { briefId in
+                        if let brief = brief(briefId) {
+                            capsule(for: brief)
+                        }
+                    }
+                    if isMorning {
+                        if pendingCount > 0 { reviewChip }
+                        // Render the connector line ONLY for a source the in-place
+                        // CONNECT sheet can actually grant (gmail | calendar |
+                        // drive — the server's OAuth `z.enum`). The worker may name
+                        // any source she observes a gap for; an UNSUPPORTED one
+                        // (e.g. "whatsapp") is never shown as a CTA — it is logged
+                        // server-side to the dev wishlist instead, so the line never
+                        // makes a promise the sheet can't keep.
+                        //
+                        // NEWEST morning only: consecutive unconnected mornings each
+                        // persist the same suggestion on their turn row; rendering
+                        // every one would stack identical CONNECT CTAs down the
+                        // thread. Her ask appears once, on the latest morning.
+                        if turn.id == morningTurn?.id,
+                           let connector = turn.connector, Self.grantableSources.contains(connector.source) {
+                            connectorLine(connector)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Resolve a referenced brief id to its `Brief` (nil if the brief hasn't
+    /// synced yet — its capsule is simply skipped).
+    private func brief(_ id: UUID) -> Brief? {
+        briefs.first { $0.id == id }
+    }
+
+    /// The embedded brief capsule (collapsed pill → unfurling letter). The Karan
+    /// brief (which has a person/prediction/tactical structure) opens its full
+    /// letter and offers "OPEN FULL BRIEF →" → the Brief screen; capsules with no
+    /// recognisable structure fall back to the brief's preview line.
+    private func capsule(for brief: Brief) -> some View {
+        BriefCapsule(brief: brief,
+                     onOpen: { emitRing(); halo.setState(.delivered) },
+                     onOpenFull: { withAnimation(Theme.Motion.overshoot()) { router.go(.brief) } })
+    }
+
+    // ─── Review chip ──────────────────────────────────────────────
+    /// A quiet pill in the thread column under the morning turn's capsules:
+    /// "{n} waiting for you   memo →" → the Review redline. Styled like the
+    /// collapsed BriefCapsule (card fill + shadow1, mono 9.5 meta) but visually
+    /// quieter — no glyph square, teal-deep mono text. Hidden when n == 0 (the
+    /// call site already guards on `pendingCount > 0`).
+    private var reviewChip: some View {
+        Button {
+            withAnimation(Theme.Motion.overshoot()) { router.go(.review) }
+        } label: {
+            HStack(spacing: 10) {
+                Text("\(pendingCount) waiting for you")
+                    .font(Theme.Font.mono(9.5)).tracking(0.4)
+                    .foregroundStyle(Theme.Palette.tealDeep)
+                Spacer(minLength: 12)
+                Text("memo →")
+                    .font(Theme.Font.mono(9.5)).tracking(0.4)
+                    .foregroundStyle(Theme.Palette.tealDeep)
+            }
+            // Match the collapsed capsule's padding so the chip reads as a sibling
+            // pill, just without the leading glyph square.
+            .padding(.vertical, 8)
+            .padding(.horizontal, 16)
+            .background(RoundedRectangle(cornerRadius: 999, style: .continuous).fill(Theme.Palette.card))
+            .clipShape(RoundedRectangle(cornerRadius: 999, style: .continuous))
+            .shadow1()
+        }
+        .buttonStyle(.plain)
+    }
+
+    // ─── Connector line ───────────────────────────────────────────
+    /// The connector sources the in-place CONNECT sheet can grant — the server's
+    /// OAuth `z.enum(["gmail","calendar","drive"])` (§4.f Phase 5). All three are
+    /// honored directly now: the sheet runs the same generic flow for each, so
+    /// there is no destination that lacks a row. Any source OUTSIDE this set is
+    /// never rendered as a CTA (suppressed at the call site).
+    private static let grantableSources: Set<String> = ["gmail", "calendar", "drive"]
+
+    /// The morning turn's single connector suggestion: a src-tag-style row of
+    /// small italic-serif copy + a mono affordance in teal-deep. Once the source
+    /// has flipped to FEEDING (granted in the sheet, OR found already-active on a
+    /// fresh-visit status check), the trailing line becomes a NON-tappable
+    /// "{SOURCE} · FEEDING" and the whole row stops acting as a button; otherwise
+    /// it reads "CONNECT {SOURCE} →" and tapping presents the in-place sheet (no
+    /// navigation). On appear — when the backend is configured — we check the
+    /// source's status once so a previously-granted source renders FEEDING
+    /// immediately rather than re-offering CONNECT.
+    @ViewBuilder
+    private func connectorLine(_ connector: TurnConnector) -> some View {
+        let fed = fedSources.contains(connector.source)
+        Group {
+            if fed {
+                // Granted — a quiet, non-tappable state. The subject is HER world
+                // ("She can see it now."), never the machinery.
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(connector.copy)
+                        .font(Theme.Font.serifItalic(14.5))
+                        .foregroundStyle(Theme.Palette.ink2)
+                        .lineSpacing(3).fixedSize(horizontal: false, vertical: true)
+                        .multilineTextAlignment(.leading)
+                    Text("\(connector.source.uppercased()) · FEEDING")
+                        .font(Theme.Font.mono(9.5)).tracking(1.0)
+                        .foregroundStyle(Theme.Palette.ink3)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                Button {
+                    connectSheetSource = ConnectSheetItem(connector: connector)
+                } label: {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(connector.copy)
+                            .font(Theme.Font.serifItalic(14.5))
+                            .foregroundStyle(Theme.Palette.ink2)
+                            .lineSpacing(3).fixedSize(horizontal: false, vertical: true)
+                            .multilineTextAlignment(.leading)
+                        Text("CONNECT \(connector.source.uppercased()) →")
+                            .font(Theme.Font.mono(9.5)).tracking(1.0)
+                            .foregroundStyle(Theme.Palette.tealDeep)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        // Fresh-visit reconcile: if the backend is configured and the source is
+        // ALREADY active server-side (granted on a prior session), render FEEDING
+        // without making the user re-tap. nil/unsupported/offline → leave the CTA.
+        .task(id: connector.source) {
+            guard !fedSources.contains(connector.source),
+                  await repo.isConnectorBackendConfigured else { return }
+            if let status = await repo.connectorStatus(source: connector.source),
+               status.status == "active" {
+                withAnimation(Theme.Motion.overshoot()) {
+                    _ = fedSources.insert(connector.source)
+                }
+            }
+        }
+    }
+
+    // ─── Time helpers ─────────────────────────────────────────────
+
+    /// "HH:mm" for the "while you slept" window, from the newest morning turn's
+    /// overnight `window`; the design's canonical "02:14 → 06:38" is the fallback
+    /// (no morning turn yet, or one without a window).
+    private var sleptWindow: String {
+        guard let w = morningTurn?.window else { return "02:14 → 06:38" }
+        return "\(Self.clock(w.start)) → \(Self.clock(w.end))"
+    }
+
+    private static let clockFormatter: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "HH:mm"; return f
+    }()
+    static func clock(_ d: Date) -> String { clockFormatter.string(from: d) }
 }
 
 // MARK: - Ayumi turn
@@ -305,12 +542,22 @@ private struct UserTurn: View {
 // MARK: - Brief capsule (morphs to a letter)
 
 private struct BriefCapsule: View {
-    let glyph: String
-    let title: String
-    let when: String
+    /// The brief this capsule embeds — title + when come from it, and the
+    /// unfurled letter renders generically from its `structureData`.
+    let brief: Brief
     let onOpen: () -> Void
     var onOpenFull: () -> Void = {}
     @State private var open = false
+
+    /// Collapsed pill title — the brief's own title.
+    private var title: String { brief.title }
+    /// Collapsed pill trailing time — the brief's `when` ("today · 5 min" → "5 min").
+    private var when: String { brief.when ?? "" }
+
+    /// Decode the brief's sections once (nil → the letter falls back to preview).
+    private var sections: [BriefSection] {
+        (try? JSONDecoder().decode(BriefStructure.self, from: brief.structureData))?.sections ?? []
+    }
 
     var body: some View {
         Group {
@@ -348,8 +595,7 @@ private struct BriefCapsule: View {
     private func headerRow(stretch: Bool) -> some View {
         let meta = Self.shortWhen(when)
         // The cap-glyph is a plain obsidian square with a single catchlight —
-        // no initial inside (matches the mock). The `glyph` argument is kept on
-        // the API for callers but is intentionally not rendered here.
+        // no initial inside (matches the mock).
         return HStack(spacing: 10) {
             RoundedRectangle(cornerRadius: 4, style: .continuous)
                 .fill(Theme.Palette.ink)
@@ -393,17 +639,40 @@ private struct BriefCapsule: View {
         return t.lowercased() == "today" ? "" : t.trimmingCharacters(in: .whitespaces)
     }
 
+    /// The unfurled letter — rendered GENERICALLY from the brief's structure,
+    /// keeping the exact visual idiom the scripted Karan letter used:
+    ///   • a `person` section → the "PERSON" label + a name·role row;
+    ///   • a `prediction` section → "LIKELY TO COME UP" + a confidence row per
+    ///     item (high→.94 / medium→.55 / low→.31, matching the prior pills);
+    ///   • a `tactical` section → "OPEN WITH" + its text;
+    /// When the brief carries none of these (the churn-swap capsule, say), fall
+    /// back to the brief's `preview` as a single row so the letter is never empty.
+    @ViewBuilder
     private var letter: some View {
         VStack(alignment: .leading, spacing: 0) {
             Rectangle().fill(Theme.Palette.rule).frame(height: 1)   // border-top 1px
-            label("Person")
-            row("Karan Mehta · Partner at Sequoia · led your A round in '22. He runs late — plan for 20 minutes, not 30.")
-            label("Likely to come up")
-            confRow(0.94, "Net retention by cohort — M6 and M12.")
-            confRow(0.88, "Whether seed is enough to skip an A.")
-            confRow(0.31, "The IP side-letter.")
-            label("Open with")
-            row("Retention, not the round. He'll be impatient otherwise — and the cohort is the strongest thing you have.")
+
+            if hasLetterBody {
+                if let person = personSection {
+                    label("Person")
+                    row("\(person.name) · \(person.role)")
+                }
+                if let prediction = predictionSection {
+                    label("Likely to come up")
+                    ForEach(prediction.items) { item in
+                        confRow(Self.confidenceValue(item.confidence), item.text)
+                    }
+                }
+                if let tactical = tacticalSection {
+                    label("Open with")
+                    row(tactical.text)
+                }
+            } else if let preview = brief.preview, !preview.isEmpty {
+                // No recognisable sections — show the brief's one-line preview so
+                // the unfurled card still says something.
+                row(preview)
+            }
+
             Button { onOpenFull() } label: {
                 Text("OPEN FULL BRIEF →")
                     .font(Theme.Font.mono(10)).tracking(1.2)
@@ -419,6 +688,30 @@ private struct BriefCapsule: View {
         .padding(.horizontal, 14)
         .padding(.bottom, 14)
     }
+
+    /// True when the brief has at least one of the three letter sections.
+    private var hasLetterBody: Bool {
+        personSection != nil || predictionSection != nil || tacticalSection != nil
+    }
+    private var personSection: PersonData? {
+        for s in sections { if case .person(let d) = s { return d } }
+        return nil
+    }
+    private var predictionSection: PredictionData? {
+        for s in sections { if case .prediction(let d) = s { return d } }
+        return nil
+    }
+    private var tacticalSection: TacticalData? {
+        for s in sections { if case .tactical(let d) = s { return d } }
+        return nil
+    }
+
+    /// Map a prediction confidence onto the canonical pill values the scripted
+    /// Karan letter used (high .94 / medium .55 / low .31).
+    static func confidenceValue(_ c: PredictionData.Item.Confidence) -> Double {
+        switch c { case .high: 0.94; case .medium: 0.55; case .low: 0.31 }
+    }
+
     private func label(_ s: String) -> some View {
         Text(s.uppercased()).font(Theme.Font.mono(9.5)).tracking(1.5)
             .foregroundStyle(Theme.Palette.ink3).padding(.top, 14).padding(.bottom, 2)
@@ -435,5 +728,201 @@ private struct BriefCapsule: View {
         }
         .padding(.vertical, 8)
         .overlay(alignment: .bottom) { Rectangle().fill(Theme.Palette.ruleSoft).frame(height: 1) }
+    }
+}
+
+// MARK: - Connect sheet
+
+/// Identifiable wrapper so the connector suggestion can drive `.sheet(item:)`
+/// (the model `TurnConnector` is Codable-only; the source string is a stable id —
+/// a turn carries at most one connector, so it can't collide within a screen).
+private struct ConnectSheetItem: Identifiable {
+    let connector: TurnConnector
+    var id: String { connector.source }
+}
+
+/// The in-place CONNECT sheet — ONE generic surface for any supported source
+/// (gmail | calendar | drive). Presented by the morning turn's connector line in
+/// place of the old route to North India. It mirrors the memo-card idiom: a paper
+/// card, a small letter-spaced mono header, and serif-italic prose whose subject
+/// is HER world, never the machinery.
+///
+/// The sheet picks its path from whether the backend is reachable:
+///   • configured (.server + https + token): the REAL Google OAuth round-trip —
+///     mint a consent URL, open it, then poll `connectorStatus` to "active";
+///   • unconfigured / .local: the app-wide DEMO grant — a short delay, then FED
+///     (everything in the local store is demo data).
+private struct ConnectorSheet: View {
+    let connector: TurnConnector
+    let repo: AtlasRepo
+    /// Called once the source has flipped to FEEDING, so the caller can record it
+    /// and re-render the connector line as non-tappable.
+    let onGranted: () -> Void
+
+    @Environment(\.openURL) private var openURL
+    @Environment(\.dismiss) private var dismiss
+
+    /// The states the sheet can be in:
+    ///   • idle        — the CONNECT button is offered (initial / after status read);
+    ///   • connecting  — the consent URL is opening and we're polling for "active",
+    ///     OR the demo delay is running;
+    ///   • fed         — the grant is live; the quiet "{SOURCE} · FEEDING" state,
+    ///     no button (reached via the button OR an on-appear already-active read);
+    ///   • unreachable — the server can't reach Google (authUrl threw
+    ///     PRECONDITION_FAILED); a single quiet line, no retry.
+    private enum Phase { case idle, connecting, fed, unreachable }
+    @State private var phase: Phase = .idle
+    /// The in-flight connect (URL mint + status poll, or the demo delay), held so
+    /// it is cancelled on disappear — the bounded poll must not outlive the sheet.
+    @State private var connectTask: Task<Void, Never>? = nil
+
+    private var source: String { connector.source }
+    private var SOURCE: String { connector.source.uppercased() }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header — mono, small, letter-spaced; the machinery named only here.
+            Text("CONNECT — \(SOURCE)")
+                .font(Theme.Font.mono(9.5)).tracking(1.5)
+                .foregroundStyle(Theme.Palette.ink3)
+                .padding(.bottom, 14)
+
+            // Her copy — the suggestion's prose, parsed through the shared Ayumi
+            // grammar so *roman*/==accent== runs render exactly as elsewhere.
+            VStack(alignment: .leading, spacing: 10.7) {
+                ForEach(Array(parseAyumiMarkup(connector.copy).enumerated()), id: \.offset) { _, runs in
+                    ayumiProse(runs, size: 16)
+                        .lineSpacing(2.7).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            Spacer(minLength: 24)
+
+            // The phase-driven foot: button / progress / fed line / unreachable.
+            switch phase {
+            case .idle:
+                // Title-case the display name — the raw enum value is lowercase
+                // ("calendar"), and "Connect calendar" reads broken on the pill.
+                PillButton(title: "Connect \(source.capitalized)", kind: .primary) { connect() }
+            case .connecting:
+                HStack(spacing: 10) {
+                    ProgressView()
+                    // Quiet, worldly — never OAuth vocabulary ("the grant") as the
+                    // subject of a rendered line.
+                    Text("One moment…")
+                        .font(Theme.Font.serifItalic(14.5))
+                        .foregroundStyle(Theme.Palette.ink3)
+                }
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.vertical, 13)
+            case .fed:
+                fedState
+            case .unreachable:
+                Text("I can't reach it yet — nothing for you to do.")
+                    .font(Theme.Font.serifItalic(14.5))
+                    .foregroundStyle(Theme.Palette.ink2)
+                    .lineSpacing(3).fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            // A quiet plain dismiss — mono, ink3 — hidden once fed (the FED state
+            // is terminal; she closes via the drag indicator).
+            if phase != .fed {
+                Button { dismiss() } label: {
+                    Text("not now")
+                        .font(Theme.Font.mono(9.5)).tracking(1.0)
+                        .foregroundStyle(Theme.Palette.ink3)
+                }
+                .buttonStyle(.plain)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.top, 14)
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.top, 28)
+        .padding(.bottom, 20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Theme.Palette.paper)
+        // On appear: if configured and already active, open straight into FED.
+        .task { await checkExistingStatus() }
+        // The bounded poll must not outlive the sheet — cancel it on disappear.
+        .onDisappear { connectTask?.cancel() }
+    }
+
+    /// The granted state — quiet mono tag + a serif-italic line about HER world.
+    private var fedState: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("\(SOURCE) · FEEDING")
+                .font(Theme.Font.mono(9.5)).tracking(1.0)
+                .foregroundStyle(Theme.Palette.ink3)
+            Text("Now I'll bring you what matters from it.")
+                .font(Theme.Font.serifItalic(15))
+                .foregroundStyle(Theme.Palette.ink2)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // ─── Flow ─────────────────────────────────────────────────────
+
+    /// On appear, surface FED immediately if the source is already granted
+    /// server-side (so a re-open after a prior grant doesn't re-offer CONNECT).
+    private func checkExistingStatus() async {
+        guard phase == .idle, await repo.isConnectorBackendConfigured else { return }
+        if let status = await repo.connectorStatus(source: source), status.status == "active" {
+            phase = .fed
+            onGranted()
+        }
+    }
+
+    /// CONNECT tapped. Configured → the real OAuth round-trip; otherwise the demo
+    /// grant. Both terminate in FED (or, for the real path, `unreachable` when the
+    /// server has no Google credentials).
+    private func connect() {
+        connectTask?.cancel()
+        connectTask = Task {
+            if await repo.isConnectorBackendConfigured {
+                await connectServer()
+            } else {
+                await connectDemo()
+            }
+        }
+    }
+
+    /// Real path: mint + open the consent URL, then poll status to "active". A
+    /// thrown authUrl (PRECONDITION_FAILED — OAuth not configured) drops to the
+    /// quiet `unreachable` state with no retry.
+    private func connectServer() async {
+        let url: URL
+        do {
+            url = try await repo.connectorAuthURL(source: source)
+        } catch {
+            phase = .unreachable
+            return
+        }
+        phase = .connecting
+        openURL(url)
+        // Poll every 2s, bounded ~120s. The view's `.task` is cancelled on
+        // disappear, so this loop unwinds if she closes the sheet mid-grant.
+        for _ in 0..<60 {
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            if Task.isCancelled { return }
+            if let status = await repo.connectorStatus(source: source), status.status == "active" {
+                withAnimation(Theme.Motion.overshoot()) { phase = .fed }
+                onGranted()
+                return
+            }
+        }
+        // Timed out without a grant — fall back to the button so she can retry.
+        phase = .idle
+    }
+
+    /// Demo path (unconfigured / .local): everything in the local store is demo
+    /// data, so simulate the grant after a short beat, then FED.
+    private func connectDemo() async {
+        phase = .connecting
+        try? await Task.sleep(nanoseconds: 1_400_000_000)
+        if Task.isCancelled { return }
+        withAnimation(Theme.Motion.overshoot()) { phase = .fed }
+        onGranted()
     }
 }

@@ -130,6 +130,55 @@ final class AtlasRepo {
         await syncProposalsQuietly()
     }
 
+    // MARK: - Morning memo redline (Today agentic flow v1)
+
+    /// Strike (or un-strike) one line of a morning turn's memo. Optimistic-local
+    /// (patch the `memoJSON` line in place so Review redraws at once), then a
+    /// durable write-through. Striking a `proposal`-ref line ALSO optimistically
+    /// dismisses the local proposal it stands for — the server does the same when
+    /// the still-pending proposal is struck, so the two reconcile to one state.
+    /// Then re-pull turns + proposals so the canonical fan-out lands.
+    func strikeMemoLine(turnID: UUID, lineId: String, struck: Bool) async throws {
+        if let turn = fetchTurn(turnID), var memo = turn.memo,
+           let idx = memo.lines.firstIndex(where: { $0.id == lineId }) {
+            memo.lines[idx].struck = struck
+            // Striking a proposal-ref line is a dismissal of that proposal —
+            // mirror the server's side effect locally so the Review queue count
+            // drops immediately and doesn't flicker back on the next pull.
+            if struck, memo.lines[idx].refKind == "proposal",
+               let refId = memo.lines[idx].refId, let pid = canonicalUUID(refId),
+               let p = fetchProposal(pid), p.status == .pending {
+                p.status = .dismissed
+                p.decidedAt = Date()
+            }
+            turn.memo = memo
+            turn.updatedAt = Date()
+            saveQuietly()
+        }
+        let id = turnID.uuidString.lowercased()
+        enqueue(.memoStrike(turnId: id, lineId: lineId, struck: struck))
+        await flushOutbox()
+        await deltaSyncTablesQuietly(["turns", "proposals"])
+    }
+
+    /// Keep (seal) a morning turn's memo. Optimistic-local status flip to `kept`,
+    /// then a durable write-through. Idempotent (an already-kept memo is a no-op
+    /// server-side). Re-pulls turns so the kept stamp reconciles.
+    func keepMemo(turnID: UUID) async throws {
+        if let turn = fetchTurn(turnID), var memo = turn.memo, memo.status != "kept" {
+            memo.status = "kept"
+            memo.keptAt = AtlasISO.string(Date())
+            memo.keptBy = "user"
+            turn.memo = memo
+            turn.updatedAt = Date()
+            saveQuietly()
+        }
+        let id = turnID.uuidString.lowercased()
+        enqueue(.memoKeep(turnId: id))
+        await flushOutbox()
+        await deltaSyncTablesQuietly(["turns", "proposals"])
+    }
+
     // MARK: - Brief actions (Start / Snooze / …)
 
     /// Act on a brief (Start/Snooze/Dismiss/Archive). Optimistic-local status
@@ -151,6 +200,44 @@ final class AtlasRepo {
         let id = briefID.uuidString.lowercased()
         enqueue(.briefAct(id: id, action: action.rawValue))
         await flushOutbox()
+    }
+
+    // MARK: - Connectors (real Gmail/Calendar/Drive OAuth, §4.f Phase 5)
+
+    /// Whether the thin client can actually reach the server right now (a server
+    /// DataSource AND a configured `https` base + device token). The CONNECT sheet
+    /// uses this to choose its path: the real OAuth round-trip when configured, the
+    /// app-wide demo simulation otherwise (everything in the `.local` store is demo
+    /// data). `api.isConfigured` is actor-isolated, so this is async.
+    var isConnectorBackendConfigured: Bool {
+        get async {
+            guard DataSource.current.isServer else { return false }
+            return await api.isConfigured
+        }
+    }
+
+    /// One source's connection state, or nil on ANY error (unmapped source string,
+    /// not configured, offline, decode). The sheet treats nil as "not connected /
+    /// unknown" and shows the CONNECT affordance. Mirrors the calm read-fallback
+    /// idiom — a connector status read never surfaces an error banner.
+    func connectorStatus(source: String) async -> ConnectorStatusDTO? {
+        guard let src = ConnectorSource(rawValue: source) else { return nil }
+        guard await api.isConfigured else { return nil }
+        return try? await api.connectorStatus(source: src)
+    }
+
+    /// Mint a Google consent URL for a source to open in the browser. Throws when
+    /// the source string doesn't map to a supported `ConnectorSource`, or when the
+    /// server can't reach Google (PRECONDITION_FAILED — GOOGLE_OAUTH_* unset), or
+    /// on any transport error. The sheet maps the throw onto its quiet
+    /// "can't reach Google yet" state rather than retrying.
+    func connectorAuthURL(source: String) async throws -> URL {
+        guard let src = ConnectorSource(rawValue: source) else {
+            throw AtlasAPIError.badURL   // unmapped source — no consent URL exists
+        }
+        let dto = try await api.connectorAuthURL(source: src)
+        guard let url = URL(string: dto.url) else { throw AtlasAPIError.badURL }
+        return url
     }
 
     // MARK: - Calendar push (§4.e — EventKit is device-only)
@@ -334,6 +421,9 @@ final class AtlasRepo {
     private func fetchProposal(_ id: UUID) -> Proposal? {
         try? context.fetch(FetchDescriptor<Proposal>(predicate: #Predicate { $0.id == id })).first
     }
+    private func fetchTurn(_ id: UUID) -> Turn? {
+        try? context.fetch(FetchDescriptor<Turn>(predicate: #Predicate { $0.id == id })).first
+    }
 
     private func saveQuietly() {
         do { try context.save() } catch {
@@ -356,6 +446,7 @@ final class AtlasRepo {
         case "watchers":      upsertWatcherRow(row)
         case "signals":       upsertSignalRow(row)
         case "proposals":     upsertProposalRow(row)
+        case "turns":         upsertTurnRow(row)
         default:              break
         }
     }
@@ -373,6 +464,7 @@ final class AtlasRepo {
             case "watchers":      if let id = canonicalUUID(raw), let r = fetchWatcher(id)  { context.delete(r) }
             case "signals":       if let id = canonicalUUID(raw), let r = fetchSignal(id)   { context.delete(r) }
             case "proposals":     if let id = canonicalUUID(raw), let r = fetchProposal(id) { context.delete(r) }
+            case "turns":         if let id = canonicalUUID(raw), let r = fetchTurn(id)     { context.delete(r) }
             case "chapter_links": if let r = fetchLink(syncKey: raw) { context.delete(r) }
             default: break
             }
@@ -563,6 +655,43 @@ final class AtlasRepo {
         p.chapter = chapterFor(row.string("chapterId")) ?? p.chapter
     }
 
+    /// Upsert a `turns` row (Today agentic flow v1) — mirrors `upsertBriefRow`.
+    /// role/kind/body/sourceTag are scalar strings; briefIds/memo/connector/meta
+    /// are nested JSON blobs stored as-is (nil when the server value is absent),
+    /// decoded lazily by the `@Model`'s computed accessors. Timestamps via
+    /// `AtlasISO.date` like every other table.
+    private func upsertTurnRow(_ row: SyncRow) {
+        guard let uuid = canonicalUUID(row.id) else { return }
+        let t = fetchTurn(uuid) ?? {
+            let nt = Turn(id: uuid,
+                          role: TurnRole(rawValue: row.string("role") ?? "") ?? .ayumi,
+                          kind: TurnKind(rawValue: row.string("kind") ?? "") ?? .message,
+                          body: row.string("body") ?? "")
+            context.insert(nt)
+            return nt
+        }()
+        if let v = row.string("role") { t.roleRaw = v }
+        if let v = row.string("kind") { t.kindRaw = v }
+        if let v = row.string("body") { t.body = v }
+        t.sourceTag = row.string("sourceTag")
+        // The four JSON blobs: keep the server value verbatim (re-encoded to
+        // bytes) so the keys round-trip; nil when the json value is absent/null.
+        t.briefIdsJSON = jsonBlob(row, "briefIds")
+        t.memoJSON     = jsonBlob(row, "memo")
+        t.connectorJSON = jsonBlob(row, "connector")
+        t.metaJSON     = jsonBlob(row, "meta")
+        if let u = AtlasISO.date(row.updatedAt) { t.updatedAt = u }
+        if let c = AtlasISO.date(row.string("createdAt")) { t.createdAt = c }
+    }
+
+    /// Re-encode a nested JSON value to bytes for a NILABLE `@Model` blob field —
+    /// nil when the server omitted the key / sent null (unlike `row.jsonData`,
+    /// which always returns a fallback). Used for `turns`' optional json columns.
+    private func jsonBlob(_ row: SyncRow, _ key: String) -> Data? {
+        guard let v = row.json(key) else { return nil }
+        return try? JSONEncoder().encode(v)
+    }
+
     // MARK: - Durable outbox (write-through queue, §4.d/§4.e)
 
     /// Enqueue a write-through with a fresh `clientRef`. The optimistic local row
@@ -575,6 +704,8 @@ final class AtlasRepo {
             case .dismiss:        return .dismiss
             case .briefAct:       return .briefAct
             case .calendarSignal: return .calendarSignal
+            case .memoStrike:     return .memoStrike
+            case .memoKeep:       return .memoKeep
             }
         }()
         return upsertOutbox(clientRef: UUID(), kind: kind, payload: payload)
@@ -648,6 +779,10 @@ final class AtlasRepo {
                 rawData: AnyEncodableValue(p.rawData),
                 summary: p.summary, arrivedAt: p.arrivedAt
             ))
+        case let .memoStrike(turnId, lineId, struck):
+            _ = try await api.turnStrike(turnId: turnId, lineId: lineId, struck: struck)
+        case let .memoKeep(turnId):
+            _ = try await api.turnKeep(turnId: turnId)
         }
     }
 
@@ -1410,6 +1545,7 @@ enum SyncEngine {
     static let tables: [String] = [
         "chapters", "todos", "decisions", "entries",
         "briefs", "watchers", "signals", "proposals", "chapter_links",
+        "turns",
     ]
 
     /// Matches the server's `MAX_PAGE`.

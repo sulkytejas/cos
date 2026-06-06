@@ -17,7 +17,8 @@
     "predev": "ATLAS_SEED=1 tsx src/db/migrate.ts",
     "worker:dev": "tsx watch worker/src/index.ts",
     "worker:once": "tsx worker/src/once.ts",
-    "worker:build": "tsc --noEmit -p worker/tsconfig.json"
+    "worker:build": "tsc --noEmit -p worker/tsconfig.json",
+    "wishlist": "tsx scripts/wishlist.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.65.0",

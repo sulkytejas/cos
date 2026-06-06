@@ -104,6 +104,22 @@ export type ProposalType = (typeof proposalTypes)[number];
 export const proposalStatuses = ["pending", "approved", "edited", "dismissed"] as const;
 export type ProposalStatus = (typeof proposalStatuses)[number];
 
+/**
+ * Turn roles (Today agentic flow v1). The Today screen is a real conversational
+ * thread backed by the `turns` table — `ayumi` is the agent's voice, `user` is
+ * the operator's own message back into the thread.
+ */
+export const turnRoles = ["ayumi", "user"] as const;
+export type TurnRole = (typeof turnRoles)[number];
+
+/**
+ * Turn kinds. `morning` is the daily-scan turn (a verdict on Today + a
+ * redlineable memo in Review); `message` is an ordinary conversational line;
+ * `thinking` is the transient "reading the deck…" beat shown while she works.
+ */
+export const turnKinds = ["morning", "message", "thinking"] as const;
+export type TurnKind = (typeof turnKinds)[number];
+
 // ─────────────────────────── v0.1 tables (extended with provenance) ───────────────────────────
 
 export const chapters = sqliteTable(
@@ -118,6 +134,14 @@ export const chapters = sqliteTable(
     startDate: text("start_date"),
     endDate: text("end_date"),
     purpose: text("purpose"),
+    /**
+     * Advisory `palette` (Today agentic flow v1): a vocabulary of component
+     * kinds from the library this chapter's life is likely to need, emitted by
+     * the worker on chapter_created/chapter_updated runs. NOT a template — it's a
+     * hint the renderer/agent can draw from. JSON array of kind names, null until
+     * a chapter touch has been processed.
+     */
+    palette: text("palette", { mode: "json" }).$type<string[] | null>(),
     /**
      * §4.d idempotent replay / optimistic reconciliation: a client-minted UUID
      * carried on create. A retried chapter create with the same `clientRef`
@@ -522,6 +546,75 @@ export const proposals = sqliteTable(
 );
 
 /**
+ * Turns — the Today screen's conversational thread (Today agentic flow v1).
+ *
+ * The worker's daily_scan composes a "morning turn": a 1-2 sentence VERDICT
+ * (`body`, shown on Today) plus a full `memo` (redlineable in Review — the user
+ * strikes lines, then "keeps" it). Voice rules live in the worker prompt; every
+ * sentence's subject is the user's world, never the agent's process. The morning
+ * turn may carry ONE `connector` suggestion (only when a concrete observed gap
+ * exists). User messages and transient `thinking` beats ride the same table so
+ * the thread renders from one ordered query.
+ *
+ * Pattern-matched to `briefs` exactly for userId / timestamps / tombstone so it
+ * rides the SAME `(updatedAt, id)` delta-sync cursor to the iOS mirror (it is
+ * registered in `sync.ts` ID_TABLES, like briefs).
+ */
+export const turns = sqliteTable(
+  "turns",
+  {
+    id: text("id").primaryKey(),
+    /** Owning user (§4.d/§4.f). */
+    userId: text("user_id").notNull().default(BOOTSTRAP_USER_ID),
+    role: text("role", { enum: turnRoles }).notNull(),
+    kind: text("kind", { enum: turnKinds }).notNull().default("message"),
+    /** The rendered body (markup grammar: `*roman*`, `==accent==`, else italic). For a morning turn this is the verdict. */
+    body: text("body").notNull(),
+    /** Short provenance label, e.g. "6 sources · email, voice memo, calendar, deck v3". Display only. */
+    sourceTag: text("source_tag"),
+    /** Briefs this turn embeds as capsules in the thread. */
+    briefIds: text("brief_ids", { mode: "json" }).$type<string[] | null>(),
+    /**
+     * The redlineable memo (morning turns only). Each line is a disposition the
+     * user can strike; striking a `proposal`-ref line dismisses that proposal.
+     * `status` flips draft → kept on "keep" (or auto-seal of a stale draft).
+     */
+    memo: text("memo", { mode: "json" }).$type<{
+      lines: Array<{
+        id: string;
+        text: string;
+        refKind: "brief" | "proposal" | null;
+        refId: string | null;
+        struck: boolean;
+      }>;
+      status: "draft" | "kept";
+      keptAt: string | null;
+      keptBy: "user" | "auto" | null;
+    } | null>(),
+    /** At most one connector suggestion — only emitted on a concrete observed gap. */
+    connector: text("connector", { mode: "json" }).$type<{
+      source: "gmail" | "calendar" | "drive";
+      copy: string;
+    } | null>(),
+    /** The overnight window this morning turn covers, for the "while you slept" divider. */
+    meta: text("meta", { mode: "json" }).$type<{
+      windowStart: string;
+      windowEnd: string;
+    } | null>(),
+    /** See briefs.generatedByEventId — recovery deletes a requeued event's prior output. */
+    generatedByEventId: text("generated_by_event_id"),
+    createdAt: text("created_at").notNull().default(ISO_NOW),
+    /** Bumped on every mutation — strike/keep/auto-seal (§4.d). ISO-8601 UTC via `$defaultFn`. */
+    updatedAt: text("updated_at").notNull().$defaultFn(() => new Date().toISOString()),
+    /** Soft-delete tombstone (§4.d). */
+    deletedAt: text("deleted_at"),
+  },
+  (t) => ({
+    userIdx: index("turns_user_idx").on(t.userId),
+  })
+);
+
+/**
  * Usage ledger — the per-user/day token budget the AI gateway enforces and
  * persists (SERVER_ARCHITECTURE.md §4.b). One row per (userId, day). The budget
  * is defined against `input + cache_creation + output` ONLY — free
@@ -880,6 +973,8 @@ export type Signal = typeof signals.$inferSelect;
 export type NewSignal = typeof signals.$inferInsert;
 export type Proposal = typeof proposals.$inferSelect;
 export type NewProposal = typeof proposals.$inferInsert;
+export type Turn = typeof turns.$inferSelect;
+export type NewTurn = typeof turns.$inferInsert;
 export type UsageLedger = typeof usageLedger.$inferSelect;
 export type NewUsageLedger = typeof usageLedger.$inferInsert;
 export type ConnectorState = typeof connectorState.$inferSelect;

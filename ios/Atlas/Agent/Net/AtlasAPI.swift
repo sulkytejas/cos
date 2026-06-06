@@ -139,6 +139,17 @@ actor AtlasAPI {
         try await mutate("proposal.dismiss", id)
     }
 
+    // Today agentic flow v1 — the morning-memo redline. `strike` toggles a memo
+    // line (and dismisses a still-pending proposal a struck proposal-line stands
+    // for); `keep` seals the memo. Both are transition-safe / idempotent so an
+    // at-least-once outbox replay can't corrupt the letter.
+    func turnStrike(turnId: String, lineId: String, struck: Bool) async throws -> OkDTO {
+        try await mutate("turn.strike", TurnStrikeInput(turnId: turnId, lineId: lineId, struck: struck))
+    }
+    func turnKeep(turnId: String) async throws -> OkDTO {
+        try await mutate("turn.keep", TurnKeepInput(turnId: turnId))
+    }
+
     // Chapters
     func chapterList() async throws -> [ChapterListItemDTO] {
         try await query("chapter.list")

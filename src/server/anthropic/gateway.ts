@@ -162,6 +162,29 @@ export interface BriefOutput {
     cadence_label?: string;
     chapter_id?: string | null;
   }>;
+  /**
+   * The morning turn (Today agentic flow v1). Emitted ONLY for daily scans —
+   * the run context says so. `verdict` is the 1-2 sentence line shown on Today;
+   * `lines` are the redlineable memo dispositions (each references a brief or a
+   * proposal_index into `proposals` so persist can resolve a refId). `connector`
+   * is at most one suggestion, only on a concrete observed gap.
+   */
+  day_memo?: {
+    verdict: string;
+    lines: Array<{ text: string; brief?: boolean; proposal_index?: number }>;
+    source_tag?: string;
+    connector?: { source: string; copy: string };
+  };
+  /**
+   * Advisory chapter palette — the vocabulary of component kinds this chapter's
+   * life will need. Emitted ONLY for chapter_created/chapter_updated runs.
+   */
+  palette?: string[];
+  /**
+   * Named modules the agent wished existed (with a one-line spec each), logged to
+   * the dev wishlist. Emitted ONLY for chapter_created/chapter_updated runs.
+   */
+  missing_modules?: Array<{ name: string; spec: string }>;
   reasoning?: string;
 }
 
@@ -625,6 +648,18 @@ function stubFallback(context: string, trace: AgentTraceEntry[]): AgentResult {
     secondary_actions: ["Dismiss"],
     proposals: [],
     watchers_to_create: [],
+    // A morning turn in the agent's voice even offline — the verdict's subject is
+    // the user's world (the night), never the gateway's process. One memo line, no
+    // metrics theater. persist only writes this turn when opts.turnKind is set (a
+    // daily scan), so it's inert on non-scan stub runs.
+    day_memo: {
+      verdict:
+        "Offline tonight — nothing was prepared. Set *ANTHROPIC_API_KEY* and I'll work the next one.",
+      // Voice rule holds even offline: the line's subject is the USER's world
+      // (their data), never the agent's machinery ("the gateway is in stub mode").
+      lines: [{ text: "Nothing was touched — your data sits exactly where you left it." }],
+      source_tag: "stub",
+    },
     reasoning: "Stub fallback engaged because no API key was found.",
   };
   return { brief, trace, raw: JSON.stringify(brief) };

@@ -13,9 +13,10 @@ import {
   signals,
   chapters,
   chapterLinks,
+  turns,
 } from "./schema";
 import { randomUUID } from "node:crypto";
-import { sql } from "drizzle-orm";
+import { sql, eq, and, isNull } from "drizzle-orm";
 
 function id() {
   return randomUUID();
@@ -25,10 +26,21 @@ function isoFromNow(deltaSeconds: number) {
   return new Date(Date.now() + deltaSeconds * 1000).toISOString();
 }
 
+/** Today, local clock, set to HH:MM — the thread renders "while you slept" times off these. */
+function todayAtLocal(hours: number, minutes: number) {
+  const d = new Date();
+  d.setHours(hours, minutes, 0, 0);
+  return d.toISOString();
+}
+
 export async function seedV2IfEmpty() {
   const existing = db.select({ count: sql<number>`count(*)` }).from(briefs).all();
   if ((existing[0]?.count ?? 0) > 0) {
     console.log("[atlas v0.2] briefs already seeded, skipping");
+    // The churn brief + the Today thread (turns) land in their OWN guards so an
+    // already-seeded DB (pre-dating the Today agentic flow) still gains them on
+    // the next boot, without re-seeding the rest of v0.2.
+    seedTurnsAndChurnBrief();
     return;
   }
 
@@ -410,11 +422,17 @@ export async function seedV2IfEmpty() {
   // ─── Proposals ──────────────────────────────────────────────────
   // 5 filed (Atlas was confident) + 3 asked (medium/low) = 8 visible in queue,
   // plus a handful of "lower noise" filed examples.
+  //
+  // Two of these ids are hoisted so the morning turn's memo lines can point a
+  // `refKind:'proposal'` line back at the underlying proposal: the Karan-reply
+  // todo and the "filed 23 newsletters" journal note (Today agentic flow v1).
+  const karanReplyProposalId = id();
+  const newslettersProposalId = id();
   db.insert(proposals)
     .values([
       // ── Filed high-confidence (status='approved' with decided_at = today) ──
       {
-        id: id(),
+        id: karanReplyProposalId,
         type: "todo",
         proposedPayload: { text: "Reply to Karan about the retention slide", chapterId: stratyfix },
         sourceBriefId: karanBriefId,
@@ -455,7 +473,7 @@ export async function seedV2IfEmpty() {
         decidedPayload: { text: "Confirm Trinity I-20 equivalent" },
       },
       {
-        id: id(),
+        id: newslettersProposalId,
         type: "journal_entry",
         proposedPayload: {
           content: "Filed 23 newsletters — none flagged for follow-up",
@@ -674,6 +692,196 @@ export async function seedV2IfEmpty() {
     .run();
 
   console.log("[atlas v0.2] seeded 3 briefs, 12 proposals, 3 watchers, ~25 signals");
+
+  // The Today thread + the churn brief — their own guards (see below) make this
+  // safe to call after a fresh seed too.
+  seedTurnsAndChurnBrief();
+}
+
+/**
+ * The Today agentic flow's seed content — a churn-slide Brief and the four
+ * conversational turns that make up the morning thread (Today agentic flow v1).
+ *
+ * Runs in its OWN existence guards (the churn brief by title, the turns by an
+ * empty `turns` table) so it lands on a freshly-seeded DB AND backfills a DB that
+ * was seeded before this flow existed. Ids for the briefs/proposals the memo
+ * lines reference are looked up from the DB (not minted here) so the refs point
+ * at the rows the main seed actually created.
+ */
+function seedTurnsAndChurnBrief() {
+  // Resolve the chapters + the brief/proposal rows the turn content points at.
+  const allChapters = db.select().from(chapters).all();
+  const stratyfix = allChapters.find((c) => c.title.startsWith("Stratyfix"))?.id;
+  if (!stratyfix) {
+    console.log("[atlas today] Stratyfix chapter not yet seeded; skipping turn seed for now");
+    return;
+  }
+
+  const now = new Date().toISOString();
+
+  // ─── 4th brief: "Swap the churn slide" (own existence guard, by title) ───
+  let churnBriefId = db
+    .select({ id: briefs.id })
+    .from(briefs)
+    .where(and(eq(briefs.title, "Swap the churn slide"), isNull(briefs.deletedAt)))
+    .get()?.id;
+
+  if (!churnBriefId) {
+    churnBriefId = id();
+    db.insert(briefs)
+      .values({
+        id: churnBriefId,
+        chapterId: stratyfix,
+        title: "Swap the churn slide",
+        situationDescription:
+          "Deck v3 still carries the old churn slide; the cohort curve is stronger.",
+        structure: {
+          sections: [
+            {
+              kind: "tactical",
+              data: {
+                text: "Replace slide 9 with the May cohort curve. Five minutes in Keynote; the old churn frame invites the wrong question.",
+              },
+            },
+          ],
+        },
+        primaryAction: "Swap it",
+        status: "surfaced",
+        surfaceAt: now,
+        chapterTitle: "Stratyfix seed round",
+        relevance: "deck v3",
+        when: "today · 5 min",
+        drafted: "drafted 07:16",
+        preview: "The cohort curve is stronger than the churn slide.",
+        agentTrace: { trace: [], raw: "(seeded)", error: null, validation: "ok" },
+      })
+      .run();
+    console.log("[atlas today] seeded the churn-slide brief");
+  }
+
+  // ─── Turns (own guard: only when the thread is empty) ───
+  const turnCount = db.select({ count: sql<number>`count(*)` }).from(turns).all();
+  if ((turnCount[0]?.count ?? 0) > 0) {
+    console.log("[atlas today] turns already seeded, skipping");
+    return;
+  }
+
+  // The memo lines reference the Karan-reply todo proposal + the filed-newsletters
+  // journal proposal + the Karan brief. Look them up by their seeded shape.
+  const karanBriefId = db
+    .select({ id: briefs.id })
+    .from(briefs)
+    .where(and(eq(briefs.title, "Karan, in 90 minutes"), isNull(briefs.deletedAt)))
+    .get()?.id ?? null;
+  const karanReplyProposalId = db
+    .select({ id: proposals.id })
+    .from(proposals)
+    .where(and(eq(proposals.summary, 'Added todo "Reply to Karan about the retention slide"'), isNull(proposals.deletedAt)))
+    .get()?.id ?? null;
+  const newslettersProposalId = db
+    .select({ id: proposals.id })
+    .from(proposals)
+    .where(and(eq(proposals.summary, "Filed 23 newsletters — none flagged for follow-up"), isNull(proposals.deletedAt)))
+    .get()?.id ?? null;
+
+  // Today, local clock: the thread renders 06:38 / 07:15 / 07:15 / 07:16.
+  const t1At = todayAtLocal(6, 38);
+  const t2At = todayAtLocal(7, 15);
+  const t3At = todayAtLocal(7, 15);
+  const t4At = todayAtLocal(7, 16);
+
+  db.insert(turns)
+    .values([
+      // T1 — the morning turn: verdict on Today + a redlineable memo in Review.
+      {
+        id: id(),
+        role: "ayumi",
+        kind: "morning",
+        body: "Karan at ==14:30== is prepared — opened with the cohort, not the round. Two changes folded; one note held.",
+        sourceTag: "6 sources · email, voice memo, calendar, deck v3",
+        briefIds: karanBriefId ? [karanBriefId] : null,
+        memo: {
+          lines: [
+            {
+              id: id(),
+              text: "A note from *Karan* landed at *03:42* — held until morning.",
+              refKind: "proposal",
+              refId: karanReplyProposalId,
+              struck: false,
+            },
+            {
+              id: id(),
+              text: "Drafted the ==14:30== brief — opened with the cohort, not the round.",
+              refKind: "brief",
+              refId: karanBriefId,
+              struck: false,
+            },
+            {
+              id: id(),
+              text: "The portrait sitting shifted one block south — folded under your stack.",
+              refKind: null,
+              refId: null,
+              struck: false,
+            },
+            {
+              id: id(),
+              text: "Filed *23* newsletters — none flagged.",
+              refKind: "proposal",
+              refId: newslettersProposalId,
+              struck: false,
+            },
+          ],
+          status: "draft",
+          keptAt: null,
+          keptBy: null,
+        },
+        // The connector suggestion is mirrored to iOS, where the Today
+        // connector-line CTA routes to the North India Living Chapter's
+        // ConnectorsSection — the only live surface that actually grants a
+        // source. That section has Gmail/Health/Maps/HDFC/IRCTC/Calendar but NO
+        // Drive row, so the seed promises the source that surface CAN grant:
+        // Calendar (one of the spec's allowed sources gmail|calendar|drive).
+        connector: {
+          source: "calendar",
+          copy: "I have Karan's invite but not the rest of your day — connect Calendar and I'll hold the hour around 14:30 clear.",
+        },
+        meta: { windowStart: todayAtLocal(2, 14), windowEnd: t1At },
+        createdAt: t1At,
+        updatedAt: t1At,
+      },
+      // T2 — the user's reply.
+      {
+        id: id(),
+        role: "user",
+        kind: "message",
+        body: "thanks — anything else I should know before the call?",
+        createdAt: t2At,
+        updatedAt: t2At,
+      },
+      // T3 — the transient "thinking" beat.
+      {
+        id: id(),
+        role: "ayumi",
+        kind: "thinking",
+        body: "reading the deck and yesterday's voice memo…",
+        createdAt: t3At,
+        updatedAt: t3At,
+      },
+      // T4 — her follow-up, embedding the churn-slide brief.
+      {
+        id: id(),
+        role: "ayumi",
+        kind: "message",
+        body: "Two small things. Your ==deck v3== still has the old churn slide — I can swap it for the cohort curve in five minutes if you want. And *V.* emailed about Thursday with a softer studio time, ==11:30== instead of ==11:00== — I haven't accepted yet.",
+        sourceTag: "3 sources · drive, gmail, calendar",
+        briefIds: churnBriefId ? [churnBriefId] : null,
+        createdAt: t4At,
+        updatedAt: t4At,
+      },
+    ])
+    .run();
+
+  console.log("[atlas today] seeded 4 turns (1 morning + 1 user + 1 thinking + 1 message)");
 }
 
 if (require.main === module) {

@@ -52,6 +52,21 @@ struct ApproveInput: Encodable {
     var editedPayload: AnyEncodableValue? = nil
 }
 
+/// `turn.strike` — patch one morning-memo line's `struck` flag (Today agentic
+/// flow v1). Striking a `proposal`-ref line server-side also dismisses the
+/// still-pending proposal it stands for. Idempotent.
+struct TurnStrikeInput: Encodable {
+    let turnId: String
+    let lineId: String
+    let struck: Bool
+}
+
+/// `turn.keep` — seal the morning memo as `kept` (status flip; idempotent if the
+/// memo is already kept).
+struct TurnKeepInput: Encodable {
+    let turnId: String
+}
+
 /// `signal.ingest` — the EventKit calendar push (§4.e). Upserts on
 /// `(source, externalId)`.
 struct SignalIngestInput: Encodable {

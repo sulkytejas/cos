@@ -2,18 +2,17 @@ import Foundation
 import SwiftData
 
 /// v0.2 seed — briefs, proposals, watchers, signals + the morning page record.
-/// Runs once if the database has no briefs yet. Pairs with v0.1 Seed (chapters
-/// must already exist).
+/// Plus the Today agentic flow v1 seed: the churn-slide brief and the morning
+/// THREAD of `Turn` rows (the conversation Today now renders from data).
+///
+/// Each concern runs under its OWN existence guard so the seed is additive: an
+/// already-seeded database (briefs present from a prior boot) still GAINS the
+/// churn brief and the turns on the next launch, instead of being short-circuited
+/// by a single top-level early-return. Pairs with v0.1 Seed (chapters must exist).
 enum SeedV2 {
     @MainActor
     static func run(in context: ModelContext) {
-        // Idempotent — if any brief exists, assume we've already seeded.
-        let descriptor = FetchDescriptor<Brief>()
-        if let count = try? context.fetchCount(descriptor), count > 0 {
-            return
-        }
-
-        // Locate the v0.1 chapters by title.
+        // Locate the v0.1 chapters by title (needed by every block below).
         guard
             let chapters = try? context.fetch(FetchDescriptor<Chapter>()),
             let stratyfix = chapters.first(where: { $0.title.hasPrefix("Stratyfix") }),
@@ -24,6 +23,50 @@ enum SeedV2 {
             return
         }
 
+        // ════════════════════════════════════════════════════════════
+        //  Block A — the original v0.2 briefs / watchers / proposals.
+        //  Guard: only if NO brief exists yet (the original idempotency).
+        // ════════════════════════════════════════════════════════════
+        let briefCount = (try? context.fetchCount(FetchDescriptor<Brief>())) ?? 0
+        if briefCount == 0 {
+            seedBriefsWatchersProposals(in: context, stratyfix: stratyfix,
+                                        health: health, move: move, trip: trip)
+        }
+
+        // ════════════════════════════════════════════════════════════
+        //  Block B — the churn-slide brief (Today agentic flow v1).
+        //  Guard: only if no brief with that title exists yet.
+        // ════════════════════════════════════════════════════════════
+        let churnTitle = "Swap the churn slide"
+        let hasChurn = ((try? context.fetch(FetchDescriptor<Brief>(
+            predicate: #Predicate { $0.title == churnTitle }
+        )))?.isEmpty == false)
+        if !hasChurn {
+            seedChurnBrief(in: context, stratyfix: stratyfix)
+        }
+
+        // ════════════════════════════════════════════════════════════
+        //  Block C — the morning THREAD of turns (Today agentic flow v1).
+        //  Guard: only if NO Turn row exists yet. Resolves the briefs +
+        //  approved proposals the memo lines reference by content (they
+        //  may have been inserted on a prior boot, by Block A above, or
+        //  by the server delta-sync).
+        // ════════════════════════════════════════════════════════════
+        let turnCount = (try? context.fetchCount(FetchDescriptor<Turn>())) ?? 0
+        if turnCount == 0 {
+            seedTurns(in: context)
+        }
+
+        try? context.save()
+    }
+
+    // MARK: - Block A — briefs / watchers / proposals
+
+    @MainActor
+    private static func seedBriefsWatchersProposals(
+        in context: ModelContext,
+        stratyfix: Chapter, health: Chapter, move: Chapter, trip: Chapter
+    ) {
         // ─── Briefs ──────────────────────────────────────────────
         // 1. Karan — meeting prep
         let karanStructure = BriefStructure(sections: [
@@ -305,8 +348,142 @@ enum SeedV2 {
                 .init(label: "a finding for the brief", value: "finding", result: "Will pin it to your next Stratyfix brief.", type: "finding"),
             ]
         ))
+    }
 
-        try? context.save()
+    // MARK: - Block B — the churn-slide brief (Today agentic flow v1)
+
+    @MainActor
+    private static func seedChurnBrief(in context: ModelContext, stratyfix: Chapter) {
+        let churnStructure = BriefStructure(sections: [
+            .tactical(TacticalData(
+                text: "Replace slide 9 with the May cohort curve. Five minutes in Keynote; the old churn frame invites the wrong question."
+            )),
+        ])
+        context.insert(Brief(
+            title: "Swap the churn slide",
+            situationDescription: "Deck v3 still carries the old churn slide; the cohort curve is stronger.",
+            structureData: encode(churnStructure),
+            surfaceAt: Date(),
+            chapter: stratyfix,
+            chapterTitle: "Stratyfix seed round",
+            relevance: "deck v3",
+            when: "today · 5 min",
+            drafted: "drafted 07:16",
+            preview: "The cohort curve is stronger than the churn slide.",
+            primaryAction: "Swap it"
+        ))
+    }
+
+    // MARK: - Block C — the morning thread of turns (Today agentic flow v1)
+
+    @MainActor
+    private static func seedTurns(in context: ModelContext) {
+        // Resolve the briefs + approved proposals the memo lines reference. They
+        // exist by now (Block A inserts them, or a prior boot / the server did),
+        // so we look them up by their stable content rather than holding refs
+        // across blocks — which also keeps Block C correct on an already-seeded DB.
+        let karanBriefId = brief(in: context, title: "Karan, in 90 minutes")?.id
+        let churnBriefId = brief(in: context, title: "Swap the churn slide")?.id
+        let replyProposalId = proposal(
+            in: context, summary: "Added todo \"Reply to Karan about the retention slide\""
+        )?.id
+        let newslettersProposalId = proposal(
+            in: context, summary: "Filed 23 newsletters — none flagged for follow-up"
+        )?.id
+
+        // Timestamps are TODAY in the local timezone — set the wall-clock times
+        // the thread reads against the morning scan.
+        let cal = Calendar.current
+        func today(_ h: Int, _ m: Int) -> Date {
+            cal.date(bySettingHour: h, minute: m, second: 0, of: Date()) ?? Date()
+        }
+
+        // ── T1 — the morning turn (the redlineable memo) ────────────────
+        let t1Lines: [TurnMemoLine] = [
+            TurnMemoLine(
+                id: UUID().uuidString,
+                text: "A note from *Karan* landed at *03:42* — held until morning.",
+                refKind: replyProposalId != nil ? "proposal" : nil,
+                refId: replyProposalId?.uuidString.lowercased(),
+                struck: false
+            ),
+            TurnMemoLine(
+                id: UUID().uuidString,
+                text: "Drafted the ==14:30== brief — opened with the cohort, not the round.",
+                refKind: karanBriefId != nil ? "brief" : nil,
+                refId: karanBriefId?.uuidString.lowercased(),
+                struck: false
+            ),
+            TurnMemoLine(
+                id: UUID().uuidString,
+                text: "The portrait sitting shifted one block south — folded under your stack.",
+                refKind: nil, refId: nil, struck: false
+            ),
+            TurnMemoLine(
+                id: UUID().uuidString,
+                text: "Filed *23* newsletters — none flagged.",
+                refKind: newslettersProposalId != nil ? "proposal" : nil,
+                refId: newslettersProposalId?.uuidString.lowercased(),
+                struck: false
+            ),
+        ]
+        context.insert(Turn(
+            role: .ayumi, kind: .morning,
+            body: "Karan at ==14:30== is prepared — opened with the cohort, not the round. Two changes folded; one note held.",
+            sourceTag: "6 sources · email, voice memo, calendar, deck v3",
+            briefIds: karanBriefId.map { [$0] },
+            memo: TurnMemo(lines: t1Lines, status: "draft", keptAt: nil, keptBy: nil),
+            // The connector suggestion opens Today's in-place CONNECT sheet — the
+            // same generic surface for any supported source (gmail|calendar|drive),
+            // so any of the three is a valid seed. We pick Calendar because this
+            // morning's concrete gap is the rest of her day around Karan's 14:30
+            // invite, which Calendar is exactly what would close.
+            connector: TurnConnector(
+                source: "calendar",
+                copy: "I have Karan's invite but not the rest of your day — connect Calendar and I'll hold the hour around 14:30 clear."
+            ),
+            window: (start: today(2, 14), end: today(6, 38)),
+            createdAt: today(6, 38), updatedAt: today(6, 38)
+        ))
+
+        // ── T2 — the user's reply ───────────────────────────────────────
+        context.insert(Turn(
+            role: .user, kind: .message,
+            body: "thanks — anything else I should know before the call?",
+            createdAt: today(7, 15), updatedAt: today(7, 15)
+        ))
+
+        // ── T3 — Ayumi thinking ──────────────────────────────────────────
+        context.insert(Turn(
+            role: .ayumi, kind: .thinking,
+            body: "reading the deck and yesterday's voice memo…",
+            createdAt: today(7, 15), updatedAt: today(7, 15)
+        ))
+
+        // ── T4 — Ayumi's follow-up message (references the churn brief) ──
+        context.insert(Turn(
+            role: .ayumi, kind: .message,
+            body: "Two small things. Your ==deck v3== still has the old churn slide — I can swap it for the cohort curve in five minutes if you want. And *V.* emailed about Thursday with a softer studio time, ==11:30== instead of ==11:00== — I haven't accepted yet.",
+            sourceTag: "3 sources · drive, gmail, calendar",
+            briefIds: churnBriefId.map { [$0] },
+            createdAt: today(7, 16), updatedAt: today(7, 16)
+        ))
+    }
+
+    // MARK: - Lookups
+
+    @MainActor
+    private static func brief(in context: ModelContext, title: String) -> Brief? {
+        try? context.fetch(FetchDescriptor<Brief>(
+            predicate: #Predicate { $0.title == title }
+        )).first
+    }
+
+    @MainActor
+    private static func proposal(in context: ModelContext, summary: String) -> Proposal? {
+        try? context.fetch(FetchDescriptor<Proposal>(
+            predicate: #Predicate { $0.summary == summary }
+        )).first
     }
 
     private static func encode<T: Encodable>(_ value: T) -> Data {

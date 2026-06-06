@@ -184,6 +184,10 @@ enum OutboxPayload: Codable {
     case dismiss(id: String)
     case briefAct(id: String, action: String)
     case calendarSignal(SignalIngestPayload)
+    // Today agentic flow v1 — the morning-memo redline write-throughs. Striking a
+    // line teaches Ayumi what doesn't matter; keeping the memo seals the letter.
+    case memoStrike(turnId: String, lineId: String, struck: Bool)
+    case memoKeep(turnId: String)
 
     /// A self-contained, replayable copy of the calendar push (so the outbox can
     /// re-send it on reconnect without re-reading EventKit).

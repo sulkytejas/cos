@@ -14,6 +14,7 @@ import { syncRouter } from "./sync";
 import { connectorRouter } from "./connector";
 import { captureRouter } from "./capture";
 import { tripRouter } from "./trip";
+import { turnRouter } from "./turn";
 
 export const appRouter = router({
   chapter: chapterRouter,
@@ -31,6 +32,7 @@ export const appRouter = router({
   connector: connectorRouter,
   capture: captureRouter,
   trip: tripRouter,
+  turn: turnRouter,
 });
 
 export type AppRouter = typeof appRouter;

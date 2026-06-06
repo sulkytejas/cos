@@ -88,6 +88,8 @@ enum OutboxKind: String, Codable, CaseIterable {
     case dismiss          // proposal.dismiss  (transition-guarded server-side)
     case briefAct         // brief.act         (status flip + brief_acted_on)
     case calendarSignal   // signal.ingest     (upsert on (source, externalId))
+    case memoStrike       // turn.strike       (patch a memo line's struck flag)
+    case memoKeep         // turn.keep         (seal the morning memo as kept)
 }
 
 /// The one-way `local→server` bootstrap latch (§4.d). A single row records that

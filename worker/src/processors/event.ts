@@ -152,6 +152,9 @@ async function prepareChapterTouched(event: schema.Event): Promise<EventCommit> 
     chapter.purpose ? `Purpose: ${chapter.purpose}` : "",
     "",
     "Consider whether this chapter needs an opening brief, a few extracted todos, or just an acknowledgement. Use chapter_query to see what's already in it.",
+    "",
+    // This is a chapter touch — emit the advisory palette + missing_modules.
+    "Also emit `palette` (this is a chapter touch): the vocabulary of component kinds from the library this chapter's life will need — advisory, not a template. And emit `missing_modules`: any named modules you wish existed for this chapter, each with a one-line `spec`.",
   ].join("\n");
 
   const result = await runAgent(context, { userId: event.userId });
@@ -276,20 +279,158 @@ async function prepareDailyScan(event: schema.Event): Promise<EventCommit> {
     .all()
     .filter((c) => c.status === "active" || c.status === "upcoming");
 
+  // The overnight window the morning turn covers ("while you slept" divider): the
+  // [min,max] of the last-24h signals' arrival times. With no overnight signal,
+  // fall back to a six-hour pre-scan window so the divider still reads sensibly.
+  const scanTime = new Date();
+  const window = computeOvernightWindow(recentSignals, scanTime);
+
+  // (a) Lines the user struck on recent morning turns — a negative-signal context
+  // so the agent doesn't resurface dispositions the user has already told it don't
+  // matter. Live morning turns from the last 7 days, struck lines only.
+  const struckSince = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const recentMorningTurns = db
+    .select()
+    .from(schema.turns)
+    .where(
+      and(
+        eq(schema.turns.userId, event.userId),
+        eq(schema.turns.kind, "morning"),
+        isNull(schema.turns.deletedAt),
+      ),
+    )
+    .all()
+    .filter((t) => t.createdAt >= struckSince);
+  const struckLines = recentMorningTurns.flatMap((t) =>
+    (t.memo?.lines ?? []).filter((l) => l.struck).map((l) => l.text),
+  );
+
+  // (b) Connector gaps — which of [gmail, calendar, drive] have NO active grant.
+  // The agent may suggest AT MOST ONE via day_memo.connector, and only when a
+  // concrete gap was observed in tonight's signals (the prompt enforces this).
+  const activeConnectors = db
+    .select()
+    .from(schema.connectorAccounts)
+    .where(
+      and(
+        eq(schema.connectorAccounts.userId, event.userId),
+        eq(schema.connectorAccounts.status, "active"),
+        isNull(schema.connectorAccounts.deletedAt),
+      ),
+    )
+    .all();
+  const connectedSources = new Set(activeConnectors.map((c) => c.source));
+  const unconnected = (["gmail", "calendar", "drive"] as const).filter(
+    (s) => !connectedSources.has(s),
+  );
+
   const context = [
     "Daily scan. Examine the active chapters and signals from the last 24 hours.",
     `Today is ${new Date().toISOString().slice(0, 10)}.`,
     "",
-    `Active chapters:\n${activeChapters.map((c) => `  - ${c.id} · ${c.title} · ${c.status}`).join("\n")}`,
+    "Active chapters:",
+    // Each chapter carries its advisory palette (the vocabulary of component kinds
+    // this chapter's life tends to need) so the scan reasons in the right idiom.
+    ...activeChapters.map(
+      (c) =>
+        `  - ${c.id} · ${c.title} · ${c.status}${
+          c.palette && c.palette.length ? ` · palette: ${c.palette.join(", ")}` : ""
+        }`,
+    ),
     "",
     `Recent signals (count by source): ${countBySource(recentSignals)}`,
     "",
+    struckLines.length
+      ? `Lines the user struck recently — do not resurface similar items:\n${struckLines
+          .map((t) => `- ${t}`)
+          .join("\n")}\n`
+      : "",
+    unconnected.length
+      ? `Sources not connected: ${unconnected.join(", ")}. Suggest at most ONE via day_memo.connector IF a concrete gap was observed in tonight's signals; otherwise omit.\n`
+      : "",
     "Produce briefs for situations that deserve preparation in the next 24 hours. If nothing warrants a brief, emit a single tiny brief titled 'A quiet day' with one tactical line and zero proposals.",
-  ].join("\n");
+    "Also emit day_memo (this is a daily scan).",
+  ]
+    .filter((line) => line !== "")
+    .join("\n");
 
   const result = await runAgent(context, { userId: event.userId });
-  return (eventId) =>
-    persistAgentResult(result, { generatedByEventId: eventId, userId: event.userId });
+  return (eventId) => {
+    // Pass the morning turn-kind + window so persist composes the Today thread's
+    // morning turn from `day_memo` (verdict + redlineable memo + connector).
+    persistAgentResult(result, {
+      generatedByEventId: eventId,
+      userId: event.userId,
+      turnKind: "morning",
+      window,
+    });
+    // Auto-seal yesterday's unresolved morning drafts: every live morning turn
+    // still in `draft` from before today's local midnight is sealed `kept` by
+    // 'auto' — a stale draft the user never opened shouldn't stay redlineable, and
+    // sealing it preserves its lines as the agent's record of that night. Runs in
+    // the SAME commit txn as the new turn insert, so today's scan and yesterday's
+    // seal commit atomically.
+    sealStaleMorningDrafts(event.userId);
+  };
+}
+
+/**
+ * Compute the overnight window ("while you slept") as [min,max] of the last-24h
+ * signals' arrival times. With no overnight signal there's no real span, so fall
+ * back to a six-hour pre-scan window ending at the scan time.
+ */
+function computeOvernightWindow(
+  signals: schema.Signal[],
+  scanTime: Date,
+): { start: string; end: string } {
+  if (signals.length === 0) {
+    return {
+      start: new Date(scanTime.getTime() - 6 * 60 * 60 * 1000).toISOString(),
+      end: scanTime.toISOString(),
+    };
+  }
+  let min = signals[0].arrivedAt;
+  let max = signals[0].arrivedAt;
+  for (const s of signals) {
+    if (s.arrivedAt < min) min = s.arrivedAt;
+    if (s.arrivedAt > max) max = s.arrivedAt;
+  }
+  return { start: min, end: max };
+}
+
+/**
+ * Seal stale morning drafts (Today agentic flow v1). A morning turn left in
+ * `draft` from before today's LOCAL midnight is sealed `kept` by 'auto' — the
+ * user moved on without redlining it, so it stops being editable but keeps its
+ * lines as the night's record. Synchronous: runs inside the daily-scan commit txn.
+ */
+function sealStaleMorningDrafts(userId: string): void {
+  const localMidnight = new Date();
+  localMidnight.setHours(0, 0, 0, 0);
+  const cutoff = localMidnight.toISOString();
+  const now = new Date().toISOString();
+  const stale = db
+    .select()
+    .from(schema.turns)
+    .where(
+      and(
+        eq(schema.turns.userId, userId),
+        eq(schema.turns.kind, "morning"),
+        isNull(schema.turns.deletedAt),
+      ),
+    )
+    .all()
+    .filter((t) => t.memo?.status === "draft" && t.createdAt < cutoff);
+  for (const t of stale) {
+    if (!t.memo) continue;
+    db.update(schema.turns)
+      .set({
+        memo: { ...t.memo, status: "kept", keptBy: "auto", keptAt: now },
+        updatedAt: now,
+      })
+      .where(eq(schema.turns.id, t.id))
+      .run();
+  }
 }
 
 async function prepareForwardDriftScan(event: schema.Event): Promise<EventCommit> {

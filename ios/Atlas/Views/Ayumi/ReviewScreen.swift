@@ -14,6 +14,26 @@ struct ReviewScreen: View {
            sort: \.createdAt, order: .reverse)
     private var pending: [Proposal]
 
+    /// The morning memo (Today agentic flow v1) — the redlineable letter the
+    /// worker's nightly daily-scan composed. We pull the newest morning turn and
+    /// surface its `memo` ABOVE the overnight review queue: each disposition line
+    /// is tappable to strike, then "Keep" seals it. Sorted newest-first so a
+    /// freshly-synced morning turn replaces the prior day's the moment it lands.
+    @Query(filter: #Predicate<Turn> { $0.kindRaw == "morning" },
+           sort: \.createdAt, order: .reverse)
+    private var morningTurns: [Turn]
+
+    /// The single morning turn whose memo we render — the most recent one.
+    private var morningTurn: Turn? { morningTurns.first }
+
+    /// Local strike/keep state is held on the SwiftData `Turn` (patched optimistically
+    /// by `repo.strikeMemoLine`/`keepMemo`), but the redline needs to re-read the memo
+    /// snapshot whenever a line is struck so the row redraws at once. This counter
+    /// is bumped on every strike/keep to force the memo card to recompute from the
+    /// (already-mutated) model — SwiftData's @Query won't always re-emit on an
+    /// in-place JSON-blob edit to a single row, so we nudge the view explicitly.
+    @State private var memoRevision = 0
+
     enum Tone { case draft, filed, held }
     struct Item: Identifiable {
         let id = UUID()
@@ -72,6 +92,11 @@ struct ReviewScreen: View {
                 VStack(alignment: .leading, spacing: 0) {
                     viewToggle
                     if view == .cards {
+                        // The morning memo redline sits ABOVE the overnight queue —
+                        // the redlineable letter the nightly scan composed. Tapping a
+                        // line strikes it (teaching Ayumi what doesn't matter); "Keep"
+                        // seals the memo and collapses it to a one-line stamp.
+                        morningMemoSection
                         openLine
                         if items.isEmpty {
                             allClear
@@ -292,6 +317,161 @@ struct ReviewScreen: View {
             .lineSpacing(1).fixedSize(horizontal: false, vertical: true)
         }
         .padding(.top, 2)
+    }
+
+    // ─── Morning memo redline (Today agentic flow v1) ──────────────
+    // The redlineable letter from the nightly daily-scan, rendered in the same
+    // letter/card idiom as the review cards (white card fill, shadow1). Each memo
+    // line is a disposition (held / folded / prepared / watching) the user can
+    // strike; striking teaches Ayumi what doesn't matter, and a struck line that
+    // references a still-pending proposal also dismisses it (handled in the repo /
+    // server). "Keep" seals the memo to `kept` and collapses the card to a single
+    // quiet stamp; an already-kept memo renders collapsed on every later visit.
+
+    @ViewBuilder
+    private var morningMemoSection: some View {
+        // `memoRevision` is read so the card recomputes after an in-place strike/keep
+        // patch to the turn's memo JSON (see the @State note above).
+        let _ = memoRevision
+        if let turn = morningTurn, let memo = turn.memo {
+            if memo.status == "kept" {
+                memoKeptRow(turn: turn, memo: memo)
+                    .padding(.bottom, 18)
+            } else {
+                memoCard(turn: turn, memo: memo)
+                    .padding(.bottom, 18)
+            }
+        }
+    }
+
+    /// The draft memo card — header, the strike-able line stack, and the Keep foot.
+    private func memoCard(turn: Turn, memo: TurnMemo) -> some View {
+        let stamp = Self.timeFormatter.string(from: turn.createdAt)
+        return VStack(alignment: .leading, spacing: 0) {
+            // CSS letter header: mono 9.5, .12em tracking, ink-3.
+            Text("THE MORNING MEMO · \(stamp)")
+                .font(Theme.Font.mono(9.5)).tracking(1.14)
+                .foregroundStyle(Theme.Palette.ink3)
+                .padding(.bottom, 12)
+
+            // Each disposition line as a tappable serif-italic 14.5 row, ruleSoft
+            // hairlines between them.
+            ForEach(Array(memo.lines.enumerated()), id: \.element.id) { idx, line in
+                if idx > 0 {
+                    Rectangle().fill(Theme.Palette.ruleSoft).frame(height: 1)
+                }
+                memoLineRow(turnID: turn.id, line: line)
+            }
+
+            // Foot — the Keep pill + the teaching caption. Only while draft.
+            HStack(alignment: .center, spacing: 12) {
+                Button { withAnimation(Theme.Motion.standard()) { keep(turn) } } label: {
+                    Text("Keep")
+                        .font(Theme.Font.serif(14)).foregroundStyle(.white)
+                        .padding(.horizontal, 18).padding(.vertical, 8)
+                        .background(Capsule().fill(Theme.Palette.ink))
+                }.buttonStyle(.plain)
+                Text("struck lines teach her what doesn't matter")
+                    .font(Theme.Font.mono(9)).tracking(0.4)
+                    .foregroundStyle(Theme.Palette.ink4)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+            }
+            .padding(.top, 14)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Theme.Palette.card))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .shadow1()
+    }
+
+    /// One disposition line — tap toggles its struck flag. Struck lines render
+    /// strikethrough + ink-3 (a crossed-out marginal note); live lines render in
+    /// the serif-italic ink voice, markup-aware via `ayumiProse`.
+    private func memoLineRow(turnID: UUID, line: TurnMemoLine) -> some View {
+        // The memo line carries Ayumi-markup (*roman* / ==accent==); a memo line is
+        // a single paragraph, so take the first paragraph's runs.
+        let runs = parseAyumiMarkup(line.text).first ?? [ProseRun(line.text)]
+        return Button {
+            withAnimation(Theme.Motion.standard()) {
+                strike(turnID: turnID, line: line)
+            }
+        } label: {
+            ayumiProse(runs, size: 14.5,
+                       color: line.struck ? Theme.Palette.ink3 : Theme.Palette.ink)
+                .strikethrough(line.struck, color: Theme.Palette.ink3)
+                .lineSpacing(2).fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 11)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// The sealed memo — a single quiet stamp row replacing the card once kept.
+    /// mono "KEPT · HH:mm" + the verdict (turn.body) as a serif-italic one-liner.
+    private func memoKeptRow(turn: Turn, memo: TurnMemo) -> some View {
+        // Prefer the instant the user kept it; fall back to the turn's createdAt.
+        let when = memo.keptAt.flatMap(AtlasISO.date) ?? turn.createdAt
+        let stamp = Self.timeFormatter.string(from: when)
+        let runs = parseAyumiMarkup(turn.body).first ?? [ProseRun(turn.body)]
+        return HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text("KEPT · \(stamp)")
+                .font(Theme.Font.mono(9.5)).tracking(1.14)
+                .foregroundStyle(Theme.Palette.ink3)
+                .fixedSize()
+            ayumiProse(runs, size: 14.5, color: Theme.Palette.ink2)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Theme.Palette.card))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .shadow1()
+        .transition(.opacity)
+    }
+
+    // ─── Memo mutations (write-through repo, optimistic local) ─────
+
+    /// Toggle a memo line's struck flag.
+    ///
+    /// We patch the SwiftData `Turn` IN PLACE first (instant strikethrough — the
+    /// card reads the memo straight off the model and `memoRevision` forces the
+    /// recompute), then fire the repo write-through. `repo.strikeMemoLine` re-applies
+    /// the same optimistic patch and enqueues the durable mutation + server fan-out
+    /// (it also dismisses the still-pending proposal a struck proposal-ref line stands
+    /// for); the second patch is idempotent — it sets `struck` to the same value and
+    /// the proposal-dismissal guard only fires while the proposal is still pending —
+    /// so the local edit and the repo's reconcile to one state without flicker.
+    private func strike(turnID: UUID, line: TurnMemoLine) {
+        let next = !line.struck
+        // Optimistic-local: patch the model so the row toggles synchronously inside
+        // the caller's withAnimation block (no wait on the network round-trip).
+        if let turn = morningTurn, var memo = turn.memo,
+           let idx = memo.lines.firstIndex(where: { $0.id == line.id }) {
+            memo.lines[idx].struck = next
+            turn.memo = memo
+        }
+        memoRevision &+= 1
+        Task { try? await repo.strikeMemoLine(turnID: turnID, lineId: line.id, struck: next) }
+    }
+
+    /// Keep (seal) the memo — flip status to `kept` so the card collapses to the
+    /// stamp row, then fire the repo write-through (idempotent; an already-kept memo
+    /// is a server no-op). The local flip drives the collapse animation immediately.
+    private func keep(_ turn: Turn) {
+        let id = turn.id
+        if var memo = turn.memo, memo.status != "kept" {
+            memo.status = "kept"
+            memo.keptAt = AtlasISO.string(Date())
+            memo.keptBy = "user"
+            turn.memo = memo
+        }
+        memoRevision &+= 1
+        Task { try? await repo.keepMemo(turnID: id) }
     }
 
     private var countRow: some View {
