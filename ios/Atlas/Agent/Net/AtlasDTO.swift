@@ -59,6 +59,8 @@ struct TurnStrikeInput: Encodable {
     let turnId: String
     let lineId: String
     let struck: Bool
+    /// Word-level redline spans (nil = whole-line gesture / legacy behavior).
+    var struckWords: [Int]? = nil
 }
 
 /// `turn.keep` — seal the morning memo as `kept` (status flip; idempotent if the
@@ -126,7 +128,7 @@ struct TripCorrectInput: Encodable {
 }
 
 /// `trip.grantConnector` — consent for a source (HDFC / IRCTC / Calendar): flips
-/// available→feeding and rewrites what she can now do.
+/// available→feeding and rewrites what Ayumi can now do.
 struct TripGrantConnectorInput: Encodable {
     var tripId: String = "north"
     let id: String

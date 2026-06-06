@@ -48,9 +48,24 @@ struct ReviewScreen: View {
     @State private var queue: [Item] = seed
     @State private var flickerWork: DispatchWorkItem?
 
+    /// Ink on the held sentences this sitting — per item, the struck word
+    /// indices (the SAME pen as the memo above; one gesture grammar). Local
+    /// until the letter seals — ink stays visible while reviewing, then any
+    /// inked sentence commits as a dismissal when the letter is put down.
+    /// Clean sentences approve themselves — silence is consent.
+    @State private var heldInk: [UUID: [Int]] = [:]
+    @Environment(\.scenePhase) private var scenePhase
+    /// When the page became visible — the seal's engagement guard. PageShell
+    /// transitions mount/unmount neighbors briefly; a letter must only seal
+    /// when it was actually HELD (visible a beat, or marked), never on a
+    /// transient flash-through.
+    @State private var appearedAt: Date? = nil
+    /// The user marked something this sitting — seals on leave regardless of dwell.
+    @State private var engaged = false
+
     /// CARDS (the overnight review queue) / DRAFT (the morning draft) toggle —
     /// the `.view-toggle` tablist from `Atlas v0.6 - Review × Halo.html`.
-    enum ReviewView: String, CaseIterable { case cards = "Cards", draft = "Draft" }
+    enum ReviewView: String, CaseIterable { case cards = "Letter", draft = "Draft" }
     @State private var view: ReviewView = .cards
 
     /// Live proposals that belong on the overnight Review surface — plain
@@ -90,29 +105,20 @@ struct ReviewScreen: View {
             // fixed 64pt from the page top (see the residual top-pad note below).
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    viewToggle
-                    if view == .cards {
-                        // The morning memo redline sits ABOVE the overnight queue —
-                        // the redlineable letter the nightly scan composed. Tapping a
-                        // line strikes it (teaching Ayumi what doesn't matter); "Keep"
-                        // seals the memo and collapses it to a one-line stamp.
-                        morningMemoSection
-                        openLine
-                        if items.isEmpty {
-                            allClear
-                        } else {
-                            countRow
-                            VStack(spacing: 10) {
-                                ForEach(items) { item in
-                                    card(item)
-                                        .transition(.asymmetric(insertion: .identity,
-                                                                 removal: .move(edge: .trailing).combined(with: .opacity)))
-                                }
-                            }
-                            .padding(.top, 8)
-                        }
-                    } else {
-                        draftView
+                    // ONE page, no tabs, no cards — the draft idiom is the design:
+                    // bare ink on paper. Ayumi's framing line, then the morning
+                    // prose (word-level redline), then everything held overnight as
+                    // sentences. Strike what's wrong; the review ENDS when the
+                    // letter is put down (leave the page / background the app):
+                    // strikes commit as dismissals, the untouched file themselves —
+                    // silence is consent — and the page collapses to its quiet
+                    // KEPT stamp for the day.
+                    draftView
+                    morningMemoSection
+                    if isLetterDraft {
+                        if !items.isEmpty { heldSection }
+                    } else if items.isEmpty {
+                        allClear
                     }
                     Spacer().frame(height: 24)   // CSS .conv padding-bottom 24
                 }
@@ -130,6 +136,91 @@ struct ReviewScreen: View {
         // CSS `.topbar { top:30px }` measured inside the page card.
         .padding(.top, 30)
         .padding(.bottom, 22)
+        // The review ENDS when the letter is put down: navigating away or
+        // backgrounding the app seals it (no confirm button — the ceremony is
+        // read, mark, walk away). Guarded by engagement: a transient mount
+        // during a page transition must never seal an unread letter.
+        .onAppear { appearedAt = Date() }
+        .onDisappear {
+            if heldLongEnough { sealLetter() }
+            appearedAt = nil
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .background, heldLongEnough { sealLetter() }
+        }
+    }
+
+    /// The letter counts as "held" after a beat of real reading, or the moment
+    /// anything was struck this sitting.
+    private var heldLongEnough: Bool {
+        if engaged { return true }
+        guard let t = appearedAt else { return false }
+        return Date().timeIntervalSince(t) > 2.5
+    }
+
+    /// True while today's morning memo is still redlineable.
+    private var isLetterDraft: Bool {
+        morningTurn?.memo?.status == "draft"
+    }
+
+    // ─── Held for you — the overnight queue as prose ──────────────
+    // Every pending proposal is a SENTENCE in the letter, not a card. A stroke
+    // or tap strikes the whole sentence (a proposal is an atomic decision —
+    // the word-pen is for the memo's editorial text above). Struck ink stays
+    // visible until the letter seals; nothing vanishes mid-read.
+
+    /// The held items continue the letter as plain sentences — same page, same
+    /// pen, nothing announcing them. The `said` run is italic in card copy; the
+    /// default prose voice here is italic with *roman* markup, so lead/trail
+    /// get re-encoded as roman runs.
+    private var heldLines: [TurnMemoLine] {
+        items.map { item in
+            var text = ""
+            if !item.lead.isEmpty { text += "*\(item.lead)*" }
+            text += item.said
+            if !item.trail.isEmpty { text += "*\(item.trail)*" }
+            return TurnMemoLine(
+                id: item.id.uuidString,
+                text: text,
+                refKind: nil, refId: nil,
+                struck: false,
+                struckWords: heldInk[item.id])
+        }
+    }
+
+    private var heldSection: some View {
+        RedlineProse(lines: heldLines, size: 16) { lineIdx, struckWords in
+            guard items.indices.contains(lineIdx) else { return }
+            engaged = true
+            heldInk[items[lineIdx].id] = struckWords.isEmpty ? nil : struckWords
+        }
+        .padding(.top, 14)
+    }
+
+    /// Put the letter down: strikes become dismissals, the untouched approve
+    /// themselves (silence is consent), the memo seals to its KEPT stamp.
+    /// Idempotent — only fires while today's letter is still a draft.
+    private func sealLetter() {
+        guard let turn = morningTurn, turn.memo?.status == "draft" else { return }
+        halo.setState(.thinking)
+        for item in items {
+            guard let p = item.proposal else { continue }
+            let id = p.id
+            // Any ink on the sentence = no; a clean sentence files itself.
+            if !(heldInk[item.id] ?? []).isEmpty {
+                Task { try? await repo.dismiss(id) }
+            } else {
+                Task { try? await repo.approve(id) }
+            }
+        }
+        queue.removeAll()
+        heldInk.removeAll()
+        engaged = false
+        keep(turn)
+        flickerWork?.cancel()
+        let work = DispatchWorkItem { halo.setState(.delivered) }
+        flickerWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7, execute: work)
     }
 
     // ─── Topbar (replaces the shell app-mark on Review) ──────────────
@@ -306,15 +397,14 @@ struct ReviewScreen: View {
                 Spacer()
                 Text("02:14 → 06:38").font(Theme.Font.mono(9.5)).tracking(0.5).foregroundStyle(Theme.Palette.ink4)
             }
-            ayumiProse([
-                .init("I drafted your morning "),
-                .init("in your own voice.", .roman),
-                .init(" Read it like rereading yourself — strike any line I got wrong, and I'll file the rest into your chapters."),
-            ], size: 21, color: Theme.Palette.ink)
-            // Same 21pt framing prose as the Cards tab — CSS line-height 1.34 over
-            // Instrument Serif's ~1.3 natural line height needs only ~1pt of added
-            // leading (was 5, which over-spread the lines).
-            .lineSpacing(1).fixedSize(horizontal: false, vertical: true)
+            // The page's ONLY instruction — quiet mono, the draft idiom's
+            // caption style. No oversized framing prose: the letter speaks in
+            // one voice and one size; the chrome whispers.
+            Text("STRIKE WHAT'S WRONG — PUTTING THE LETTER DOWN FILES THE REST")
+                .font(Theme.Font.mono(9.5)).tracking(1.0)
+                .foregroundStyle(Theme.Palette.ink4)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 2)
         }
         .padding(.top, 2)
     }
@@ -344,71 +434,22 @@ struct ReviewScreen: View {
         }
     }
 
-    /// The draft memo card — header, the strike-able line stack, and the Keep foot.
+    /// The morning prose, bare on the page (the draft idiom — no card chrome,
+    /// no header band): redlineable at WORD granularity. Drag sideways to
+    /// strike a span (snaps to whole words, haptic tick per word), tap a
+    /// single word to fine-tune, drag again over struck ink to erase. A
+    /// fully-struck sentence fires the full forget/dismiss effects; a partial
+    /// strike is recorded on the line and teaches without deleting.
     private func memoCard(turn: Turn, memo: TurnMemo) -> some View {
-        let stamp = Self.timeFormatter.string(from: turn.createdAt)
-        return VStack(alignment: .leading, spacing: 0) {
-            // CSS letter header: mono 9.5, .12em tracking, ink-3.
-            Text("THE MORNING MEMO · \(stamp)")
-                .font(Theme.Font.mono(9.5)).tracking(1.14)
-                .foregroundStyle(Theme.Palette.ink3)
-                .padding(.bottom, 12)
-
-            // Each disposition line as a tappable serif-italic 14.5 row, ruleSoft
-            // hairlines between them.
-            ForEach(Array(memo.lines.enumerated()), id: \.element.id) { idx, line in
-                if idx > 0 {
-                    Rectangle().fill(Theme.Palette.ruleSoft).frame(height: 1)
-                }
-                memoLineRow(turnID: turn.id, line: line)
-            }
-
-            // Foot — the Keep pill + the teaching caption. Only while draft.
-            HStack(alignment: .center, spacing: 12) {
-                Button { withAnimation(Theme.Motion.standard()) { keep(turn) } } label: {
-                    Text("Keep")
-                        .font(Theme.Font.serif(14)).foregroundStyle(.white)
-                        .padding(.horizontal, 18).padding(.vertical, 8)
-                        .background(Capsule().fill(Theme.Palette.ink))
-                }.buttonStyle(.plain)
-                Text("struck lines teach her what doesn't matter")
-                    .font(Theme.Font.mono(9)).tracking(0.4)
-                    .foregroundStyle(Theme.Palette.ink4)
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 0)
-            }
-            .padding(.top, 14)
+        RedlineProse(lines: memo.lines, size: 16) { lineIdx, struckWords in
+            commitRedline(turn: turn, lineIdx: lineIdx, struckWords: struckWords)
         }
-        .padding(.horizontal, 16).padding(.vertical, 14)
+        .padding(.top, 16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Theme.Palette.card))
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .shadow1()
     }
+
 
     /// One disposition line — tap toggles its struck flag. Struck lines render
-    /// strikethrough + ink-3 (a crossed-out marginal note); live lines render in
-    /// the serif-italic ink voice, markup-aware via `ayumiProse`.
-    private func memoLineRow(turnID: UUID, line: TurnMemoLine) -> some View {
-        // The memo line carries Ayumi-markup (*roman* / ==accent==); a memo line is
-        // a single paragraph, so take the first paragraph's runs.
-        let runs = parseAyumiMarkup(line.text).first ?? [ProseRun(line.text)]
-        return Button {
-            withAnimation(Theme.Motion.standard()) {
-                strike(turnID: turnID, line: line)
-            }
-        } label: {
-            ayumiProse(runs, size: 14.5,
-                       color: line.struck ? Theme.Palette.ink3 : Theme.Palette.ink)
-                .strikethrough(line.struck, color: Theme.Palette.ink3)
-                .lineSpacing(2).fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.vertical, 11)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-
     /// The sealed memo — a single quiet stamp row replacing the card once kept.
     /// mono "KEPT · HH:mm" + the verdict (turn.body) as a serif-italic one-liner.
     private func memoKeptRow(turn: Turn, memo: TurnMemo) -> some View {
@@ -426,37 +467,45 @@ struct ReviewScreen: View {
                 .truncationMode(.tail)
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 16).padding(.vertical, 12)
+        .padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Theme.Palette.card))
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .shadow1()
         .transition(.opacity)
     }
 
     // ─── Memo mutations (write-through repo, optimistic local) ─────
 
-    /// Toggle a memo line's struck flag.
+    /// Commit one line's redline state from the word-level gesture.
     ///
-    /// We patch the SwiftData `Turn` IN PLACE first (instant strikethrough — the
-    /// card reads the memo straight off the model and `memoRevision` forces the
-    /// recompute), then fire the repo write-through. `repo.strikeMemoLine` re-applies
-    /// the same optimistic patch and enqueues the durable mutation + server fan-out
-    /// (it also dismisses the still-pending proposal a struck proposal-ref line stands
-    /// for); the second patch is idempotent — it sets `struck` to the same value and
-    /// the proposal-dismissal guard only fires while the proposal is still pending —
-    /// so the local edit and the repo's reconcile to one state without flicker.
-    private func strike(turnID: UUID, line: TurnMemoLine) {
-        let next = !line.struck
-        // Optimistic-local: patch the model so the row toggles synchronously inside
-        // the caller's withAnimation block (no wait on the network round-trip).
-        if let turn = morningTurn, var memo = turn.memo,
-           let idx = memo.lines.firstIndex(where: { $0.id == line.id }) {
-            memo.lines[idx].struck = next
-            turn.memo = memo
-        }
+    /// `struckWords` is the line's complete struck set after the stroke/tap.
+    /// Full coverage → the classic whole-line strike (struck=true: backing
+    /// notes forgotten, pending proposal dismissed). Empty → clean un-strike.
+    /// Anything between → the PUT: struck=false + the word list, recorded on
+    /// the line, no destructive effects.
+    ///
+    /// We patch the SwiftData `Turn` IN PLACE first (instant ink — the card
+    /// reads the memo straight off the model and `memoRevision` forces the
+    /// recompute), then fire the repo write-through, whose own optimistic
+    /// patch is idempotent against ours.
+    private func commitRedline(turn: Turn, lineIdx: Int, struckWords: [Int]) {
+        guard var memo = turn.memo, memo.lines.indices.contains(lineIdx) else { return }
+        let line = memo.lines[lineIdx]
+        let totalWords = tokenizeMemoLines([line]).count
+        let full = totalWords > 0 && struckWords.count >= totalWords
+        let none = struckWords.isEmpty
+        let words: [Int]? = (full || none) ? nil : struckWords
+
+        memo.lines[lineIdx].struck = full
+        memo.lines[lineIdx].struckWords = words
+        turn.memo = memo
         memoRevision &+= 1
-        Task { try? await repo.strikeMemoLine(turnID: turnID, lineId: line.id, struck: next) }
+        engaged = true
+
+        let turnID = turn.id
+        let lineId = line.id
+        Task {
+            try? await repo.strikeMemoLine(
+                turnID: turnID, lineId: lineId, struck: full, struckWords: words)
+        }
     }
 
     /// Keep (seal) the memo — flip status to `kept` so the card collapses to the

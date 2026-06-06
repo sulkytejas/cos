@@ -167,6 +167,11 @@ struct TurnMemoLine: Codable {
     /// The referenced brief/proposal id (nil when `refKind` is nil).
     var refId: String?
     var struck: Bool
+    /// Word-level redline: indices of struck WORDS in the display tokenization
+    /// (markup stripped, whitespace-split). Partial strike = a PUT — the line
+    /// lives on with spans recorded; only full `struck` fires forget/dismiss.
+    /// Optional so pre-redline memos decode unchanged.
+    var struckWords: [Int]?
 }
 
 /// At most one connector suggestion the morning turn may carry — only when a

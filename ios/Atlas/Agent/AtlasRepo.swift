@@ -138,10 +138,14 @@ final class AtlasRepo {
     /// dismisses the local proposal it stands for — the server does the same when
     /// the still-pending proposal is struck, so the two reconcile to one state.
     /// Then re-pull turns + proposals so the canonical fan-out lands.
-    func strikeMemoLine(turnID: UUID, lineId: String, struck: Bool) async throws {
+    /// `struckWords` is the word-level redline (nil = whole-line gesture):
+    /// partial spans are a PUT — recorded on the line, no dismissal effects;
+    /// only a full strike (struck=true) dismisses the proposal it stands for.
+    func strikeMemoLine(turnID: UUID, lineId: String, struck: Bool, struckWords: [Int]? = nil) async throws {
         if let turn = fetchTurn(turnID), var memo = turn.memo,
            let idx = memo.lines.firstIndex(where: { $0.id == lineId }) {
             memo.lines[idx].struck = struck
+            memo.lines[idx].struckWords = (struck || (struckWords?.isEmpty ?? true)) ? nil : struckWords
             // Striking a proposal-ref line is a dismissal of that proposal —
             // mirror the server's side effect locally so the Review queue count
             // drops immediately and doesn't flicker back on the next pull.
@@ -156,7 +160,7 @@ final class AtlasRepo {
             saveQuietly()
         }
         let id = turnID.uuidString.lowercased()
-        enqueue(.memoStrike(turnId: id, lineId: lineId, struck: struck))
+        enqueue(.memoStrike(turnId: id, lineId: lineId, struck: struck, struckWords: struckWords))
         await flushOutbox()
         await deltaSyncTablesQuietly(["turns", "proposals"])
     }
@@ -779,8 +783,8 @@ final class AtlasRepo {
                 rawData: AnyEncodableValue(p.rawData),
                 summary: p.summary, arrivedAt: p.arrivedAt
             ))
-        case let .memoStrike(turnId, lineId, struck):
-            _ = try await api.turnStrike(turnId: turnId, lineId: lineId, struck: struck)
+        case let .memoStrike(turnId, lineId, struck, struckWords):
+            _ = try await api.turnStrike(turnId: turnId, lineId: lineId, struck: struck, struckWords: struckWords)
         case let .memoKeep(turnId):
             _ = try await api.turnKeep(turnId: turnId)
         }
@@ -1075,7 +1079,7 @@ extension AtlasRepo {
     /// File a completed capture (README §"A filed state"). REAL backend
     /// (`.server` + configured): `capture.file` — a "file note" mutation that
     /// emits a `capture_received` event the worker fans into the right todo/
-    /// decision/note row (re-classifying if `kind`/`chapterId` were left to her).
+    /// decision/note row (re-classifying if `kind`/`chapterId` were left to Ayumi).
     /// Offline / `.local`: a no-op — the optimistic "Kept." confirmation stands
     /// and the intent can be retried on reconnect.
     func fileCapture(text: String, kind: String, chapterId: String?, answer: String?,
@@ -1152,7 +1156,7 @@ extension AtlasRepo {
 
     /// Grant a connector (README §6). REAL backend (`.server` + configured):
     /// `trip.grantConnector` — flips the source available→feeding, rewrites what
-    /// she can now do, persists the grant, and marks the chapter for re-derivation
+    /// Ayumi can now do, persists the grant, and marks the chapter for re-derivation
     /// (a real build backfills + re-derives affected sections). Idempotent.
     /// Offline / `.local`: a no-op — the view applies the optimistic relabel from
     /// the connector's `unlockCopy`. Returns the rewritten role/unlock copy on the
