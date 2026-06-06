@@ -36,7 +36,7 @@ struct AtlasApp: App {
     @State private var lockPhase: LockPhase = .locked
     /// Quick re-entry (re-lock after backgrounding) skips the scan-frame
     /// ceremony — no track circle, no sweep, no brackets. Just the seal,
-    /// turning jade when she knows you. Cold launches get the full ceremony.
+    /// turning jade on recognition. Cold launches get the full ceremony.
     @State private var lockIsQuick = false
 
     private static let lockDefaultsKey = "requireBiometricLock"
@@ -61,6 +61,31 @@ struct AtlasApp: App {
     }
 
     init() {
+        #if DEBUG
+        // Dev-only pairing hook — configure the server + device token from a
+        // launch arg, so the SIMULATOR can pair with the local dev server
+        // without driving the Settings UI (idb gestures unavailable):
+        //   xcrun simctl launch <udid> com.atlas.app --pair http://localhost:3000 <token>
+        // Writes the same stores the Settings pairing flow writes (UserDefaults
+        // URL + Keychain token) BEFORE AtlasAPI first reads them. Compiled out
+        // of release builds; the https-only rule still governs non-loopback URLs.
+        if let i = CommandLine.arguments.firstIndex(of: "--pair"),
+           i + 2 < CommandLine.arguments.count {
+            let url = CommandLine.arguments[i + 1]
+            let token = CommandLine.arguments[i + 2]
+            let log = Logger(subsystem: "com.atlas.app", category: "Pair")
+            if AtlasAPI.validatedHTTPS(url) != nil {
+                UserDefaults.standard.set(url, forKey: AtlasAPI.baseURLDefaultsKey)
+                Keychain.deviceToken = token
+                log.info("paired via launch arg: \(url, privacy: .public), token stored: \(Keychain.hasDeviceToken)")
+            } else {
+                log.error("--pair URL rejected: \(url, privacy: .public)")
+            }
+        } else if CommandLine.arguments.contains("--pair") {
+            Logger(subsystem: "com.atlas.app", category: "Pair")
+                .error("--pair present but missing <url> <token>; argv: \(CommandLine.arguments.joined(separator: " "), privacy: .public)")
+        }
+        #endif
         let container = AppContainer.make()
         self.container = container
         // Build the repo on the container's main context (it is `@MainActor`).
@@ -226,7 +251,7 @@ struct AtlasApp: App {
             guard ok else { lockPhase = .locked; return }
             // Let the sweep finish (handout: scanning holds 1.45s) — but never
             // wait longer than the sweep still owes. Quick re-entry has no
-            // sweep to honor: recognition lands the moment she knows you.
+            // sweep to honor: recognition lands the moment Ayumi knows you.
             if !lockIsQuick {
                 let owed = 1.45 - Date().timeIntervalSince(scanStart)
                 if owed > 0 { try? await Task.sleep(for: .seconds(owed)) }
@@ -284,12 +309,12 @@ struct AtlasApp: App {
     /// seal 歩 sits inside a scan frame — a hairline track circle, a jade
     /// progress ring, four corner brackets — over a crossfading caption.
     /// Recognition is a ceremony, not a spinner: the ring sweeps closed while
-    /// she looks, the halo blooms gold when she knows you, and the paper card
+    /// Ayumi looks, the halo blooms gold on recognition, and the paper card
     /// itself opens through (scale 1.06, fade 760ms) like a door.
     private struct AppLockCover: View {
         let phase: LockPhase
         /// Re-entry covers drop the scan frame — the seal alone carries the
-        /// recognition (it turns jade when she knows you).
+        /// recognition (it turns jade once Ayumi knows you).
         let quick: Bool
         let onUnlock: () -> Void
         /// The cover's own halo (idle → thinking → delivered across the phases).

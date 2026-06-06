@@ -73,16 +73,31 @@ actor AtlasAPI {
 
     /// Validate + normalize a base URL: must parse, must be `https`, must have a
     /// host. Trailing slash trimmed so path joining is unambiguous.
+    ///
+    /// DEBUG-only exception: plain `http` is allowed for LOOPBACK hosts
+    /// (localhost / 127.0.0.1) so the simulator can pair with the dev server on
+    /// the host Mac (`pnpm dev`, :3000). Compiled out of release builds — a
+    /// TestFlight/App Store build still rejects every non-https URL (§4.e).
     nonisolated static func validatedHTTPS(_ string: String) -> URL? {
         let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
               let comps = URLComponents(string: trimmed),
-              comps.scheme?.lowercased() == "https",
               let host = comps.host, !host.isEmpty
         else { return nil }
+        let scheme = comps.scheme?.lowercased()
+        guard scheme == "https" || Self.isDebugLoopback(scheme: scheme, host: host) else { return nil }
         var s = trimmed
         while s.hasSuffix("/") { s.removeLast() }
         return URL(string: s)
+    }
+
+    /// True only in DEBUG builds for `http://localhost` / `http://127.0.0.1`.
+    nonisolated static func isDebugLoopback(scheme: String?, host: String?) -> Bool {
+        #if DEBUG
+        return scheme == "http" && (host == "localhost" || host == "127.0.0.1")
+        #else
+        return false
+        #endif
     }
 
     // MARK: - Public endpoint surface (DTOs in AtlasDTO.swift)
@@ -143,8 +158,8 @@ actor AtlasAPI {
     // line (and dismisses a still-pending proposal a struck proposal-line stands
     // for); `keep` seals the memo. Both are transition-safe / idempotent so an
     // at-least-once outbox replay can't corrupt the letter.
-    func turnStrike(turnId: String, lineId: String, struck: Bool) async throws -> OkDTO {
-        try await mutate("turn.strike", TurnStrikeInput(turnId: turnId, lineId: lineId, struck: struck))
+    func turnStrike(turnId: String, lineId: String, struck: Bool, struckWords: [Int]? = nil) async throws -> OkDTO {
+        try await mutate("turn.strike", TurnStrikeInput(turnId: turnId, lineId: lineId, struck: struck, struckWords: struckWords))
     }
     func turnKeep(turnId: String) async throws -> OkDTO {
         try await mutate("turn.keep", TurnKeepInput(turnId: turnId))
@@ -256,8 +271,11 @@ actor AtlasAPI {
     /// Issue the request, unwrap `result.data.json`, with Retry-After backoff.
     private func send<R: Decodable>(method: String, path: String, body: Data?) async throws -> R {
         guard let base = baseURL else { throw AtlasAPIError.notConfigured }
-        // Re-assert https per request (defense in depth — §4.e).
-        guard base.scheme?.lowercased() == "https" else { throw AtlasAPIError.insecureBaseURL }
+        // Re-assert https per request (defense in depth — §4.e). DEBUG builds
+        // additionally allow the loopback dev-server exception (see validatedHTTPS).
+        guard base.scheme?.lowercased() == "https"
+                || Self.isDebugLoopback(scheme: base.scheme?.lowercased(), host: base.host)
+        else { throw AtlasAPIError.insecureBaseURL }
         guard let token = Keychain.deviceToken, !token.isEmpty else {
             throw AtlasAPIError.missingToken
         }

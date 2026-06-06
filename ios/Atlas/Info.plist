@@ -58,5 +58,14 @@
 	<string>Ayumi uses Face ID so only you can open your life. Your face never leaves this device.</string>
 	<key>NSCalendarsFullAccessUsageDescription</key>
 	<string>Ayumi reads your calendar to prepare you for what's coming — it never edits or shares your events.</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<!-- Loopback-only relaxation so the DEBUG simulator build can pair with
+		     the dev server on the host Mac (http://localhost:3000). Does NOT
+		     permit arbitrary http — AtlasAPI still rejects every non-https,
+		     non-loopback URL, and release builds reject loopback too. -->
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 </dict>
 </plist>
